@@ -46,6 +46,19 @@ describe('WPML export', () => {
     expect(xml.match(/gimbalRotate</g)?.length).toBe(m.waypoints.length)
   })
 
+  it('DJI Fly waylines mirror what DJI Fly writes itself', () => {
+    const m = planGrid(RECT, mini4, { ...defaultGridParams, triggerMode: 'waypoint' })
+    const xml = buildWaylinesWpml(m, mini4, 'djifly')
+    expect(xml).not.toContain('Discontinuity')
+    expect(xml).toContain('toPointAndStopWithContinuityCurvature')
+    expect(xml.match(/<wpml:waypointGimbalHeadingParam>/g)?.length).toBe(m.waypoints.length)
+    expect(xml.match(/<wpml:waypointHeadingPoiIndex>/g)?.length).toBe(m.waypoints.length)
+    expect(xml).not.toContain('globalRTHHeight')
+    expect(xml).toContain('<wpml:gimbalHeadingYawBase>aircraft</wpml:gimbalHeadingYawBase>')
+    const ids = [...xml.matchAll(/<wpml:actionId>(\d+)<\/wpml:actionId>/g)].map((x) => x[1])
+    expect(new Set(ids).size).toBe(ids.length) // unique across the mission
+  })
+
   it('DJI Fly template.kml is a stub: the route lives only in waylines.wpml', () => {
     const t = buildTemplateKml(grid, mini4, 'djifly')
     expect(parse(t).getElementsByTagName('parsererror').length).toBe(0)

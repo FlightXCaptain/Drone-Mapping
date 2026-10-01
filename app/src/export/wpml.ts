@@ -16,9 +16,10 @@ import type { DroneProfile, Mission, Waypoint } from '../domain/types'
 export type WpmlTarget = 'pilot2' | 'djifly'
 
 /**
- * DJI Fly reads a narrower, older dialect than Pilot 2 (community-verified against files
- * DJI Fly itself writes): different namespace host, no payloadInfo, 1-based action IDs,
- * and an uncompressed zip.
+ * DJI Fly reads a narrower, older dialect than Pilot 2. The `fly` settings below mirror a
+ * mission DJI Fly itself wrote on an RC 2 (Mini 4 Pro, Oct 2026): uav.com namespace, no
+ * payloadInfo or RTH height, continuity-curvature turn modes, a per-waypoint gimbal heading
+ * block, heading POI index, aircraft-relative gimbal yaw, and deflate compression.
  */
 interface Dialect {
   ns: string
@@ -29,6 +30,8 @@ interface Dialect {
   compression: 'DEFLATE' | 'STORE'
   /** DJI Fly only executes waylines.wpml; its own template.kml is a stub with no route. */
   templateStub: boolean
+  /** Write the extra/alternative fields DJI Fly uses in its own files (see above). */
+  fly: boolean
 }
 
 const DIALECTS: Record<WpmlTarget, Dialect> = {
@@ -40,6 +43,7 @@ const DIALECTS: Record<WpmlTarget, Dialect> = {
     firstActionId: 0,
     compression: 'DEFLATE',
     templateStub: false,
+    fly: false,
   },
   djifly: {
     ns: 'http://www.uav.com/wpmz/1.0.2',
@@ -47,8 +51,9 @@ const DIALECTS: Record<WpmlTarget, Dialect> = {
     payloadInfo: false,
     takeOffSecurityHeight: false,
     firstActionId: 1,
-    compression: 'STORE',
+    compression: 'DEFLATE',
     templateStub: true,
+    fly: true,
   },
 }
 
@@ -85,15 +90,15 @@ function missionConfig(drone: DroneProfile, mission: Mission, d: Dialect): strin
       <wpml:executeRCLostAction>goBack</wpml:executeRCLostAction>${d.takeOffSecurityHeight ? `
       <wpml:takeOffSecurityHeight>20</wpml:takeOffSecurityHeight>` : ''}
       <wpml:globalTransitionalSpeed>${f(Math.min(drone.maxSpeedMs, Math.max(firstSpeed, 8)), 1)}</wpml:globalTransitionalSpeed>
-      <wpml:globalRTHHeight>${Math.max(30, ...mission.waypoints.map((w) => Math.ceil(w.altitudeM)))}</wpml:globalRTHHeight>
-      <wpml:droneInfo>
+${d.fly ? '' : `      <wpml:globalRTHHeight>${Math.max(30, ...mission.waypoints.map((w) => Math.ceil(w.altitudeM)))}</wpml:globalRTHHeight>
+`}      <wpml:droneInfo>
         <wpml:droneEnumValue>${ids.droneEnumValue}</wpml:droneEnumValue>
         <wpml:droneSubEnumValue>${ids.droneSubEnumValue}</wpml:droneSubEnumValue>
       </wpml:droneInfo>${payload}
     </wpml:missionConfig>`
 }
 
-function headingParam(w: Waypoint): string {
+function headingParam(w: Waypoint, d: Dialect): string {
   const h = headingFor(w)
   return `
         <wpml:waypointHeadingParam>
@@ -101,27 +106,33 @@ function headingParam(w: Waypoint): string {
           <wpml:waypointHeadingAngle>${h === undefined ? 0 : f(h, 1)}</wpml:waypointHeadingAngle>
           <wpml:waypointPoiPoint>0.000000,0.000000,0.000000</wpml:waypointPoiPoint>
           <wpml:waypointHeadingAngleEnable>${h === undefined ? 0 : 1}</wpml:waypointHeadingAngleEnable>
-          <wpml:waypointHeadingPathMode>followBadArc</wpml:waypointHeadingPathMode>
+          <wpml:waypointHeadingPathMode>followBadArc</wpml:waypointHeadingPathMode>${d.fly ? `
+          <wpml:waypointHeadingPoiIndex>0</wpml:waypointHeadingPoiIndex>` : ''}
         </wpml:waypointHeadingParam>`
 }
 
-// Stop at every waypoint: photo waypoints need a still aircraft for sharp images, and on
-// mapping grids the waypoints are the line-end turn-arounds, where curving would cut the overshoot.
-function turnParam(): string {
+// Stop at photo waypoints (sharp images) and at mapping line ends (curving would cut the
+// overshoot). DJI Fly only writes the *ContinuityCurvature turn modes, so use those for it.
+function turnParam(stop: boolean, d: Dialect): string {
+  const mode = d.fly
+    ? stop
+      ? 'toPointAndStopWithContinuityCurvature'
+      : 'toPointAndPassWithContinuityCurvature'
+    : 'toPointAndStopWithDiscontinuityCurvature'
   return `
         <wpml:waypointTurnParam>
-          <wpml:waypointTurnMode>toPointAndStopWithDiscontinuityCurvature</wpml:waypointTurnMode>
+          <wpml:waypointTurnMode>${mode}</wpml:waypointTurnMode>
           <wpml:waypointTurnDampingDist>0</wpml:waypointTurnDampingDist>
         </wpml:waypointTurnParam>`
 }
 
-function gimbalAction(id: number, pitch: number): string {
+function gimbalAction(id: number, pitch: number, d: Dialect): string {
   return `
           <wpml:action>
             <wpml:actionId>${id}</wpml:actionId>
             <wpml:actionActuatorFunc>gimbalRotate</wpml:actionActuatorFunc>
             <wpml:actionActuatorFuncParam>
-              <wpml:gimbalHeadingYawBase>north</wpml:gimbalHeadingYawBase>
+              <wpml:gimbalHeadingYawBase>${d.fly ? 'aircraft' : 'north'}</wpml:gimbalHeadingYawBase>
               <wpml:gimbalRotateMode>absoluteAngle</wpml:gimbalRotateMode>
               <wpml:gimbalPitchRotateEnable>1</wpml:gimbalPitchRotateEnable>
               <wpml:gimbalPitchRotateAngle>${f(pitch, 1)}</wpml:gimbalPitchRotateAngle>
@@ -160,7 +171,7 @@ function hoverAction(id: number, seconds: number): string {
 }
 
 /** Action groups for one waypoint: its own reachPoint actions, plus any interval segment starting here. */
-function actionGroups(mission: Mission, index: number, nextGroupId: () => number, d: Dialect): string {
+function actionGroups(mission: Mission, index: number, nextGroupId: () => number, nextActionId: () => number, d: Dialect): string {
   const w = mission.waypoints[index]
   let out = ''
   // DJI Fly expects an explicit gimbal pitch on every waypoint (it writes one itself);
@@ -170,10 +181,14 @@ function actionGroups(mission: Mission, index: number, nextGroupId: () => number
       ? [{ type: 'gimbalPitch' as const, pitchDeg: w.gimbalPitchDeg }, ...w.actions]
       : w.actions
   if (own.length) {
-    let aid = d.firstActionId
+    // Action IDs are unique across the whole mission, as in DJI's own files.
     const actions = own
       .map((a) =>
-        a.type === 'takePhoto' ? photoAction(aid++) : a.type === 'gimbalPitch' ? gimbalAction(aid++, a.pitchDeg) : hoverAction(aid++, a.seconds),
+        a.type === 'takePhoto'
+          ? photoAction(nextActionId())
+          : a.type === 'gimbalPitch'
+            ? gimbalAction(nextActionId(), a.pitchDeg, d)
+            : hoverAction(nextActionId(), a.seconds),
       )
       .join('')
     out += `
@@ -197,17 +212,29 @@ function actionGroups(mission: Mission, index: number, nextGroupId: () => number
           <wpml:actionTrigger>
             <wpml:actionTriggerType>multipleDistance</wpml:actionTriggerType>
             <wpml:actionTriggerParam>${f(seg.distanceM, 2)}</wpml:actionTriggerParam>
-          </wpml:actionTrigger>${photoAction(d.firstActionId)}
+          </wpml:actionTrigger>${photoAction(nextActionId())}
         </wpml:actionGroup>`
   }
   return out
 }
 
 function placemarks(mission: Mission, kind: 'template' | 'waylines', d: Dialect): string {
-  let groupId = 0
+  let groupId = d.firstActionId
   const nextGroupId = () => groupId++
+  let actionId = d.firstActionId
+  const nextActionId = () => actionId++
+  const last = mission.waypoints.length - 1
   return mission.waypoints
     .map((w, i) => {
+      // Pass through only waypoints with nothing to do (e.g. transits between parts).
+      const stop = i === 0 || i === last || w.actions.length > 0 || mission.intervalSegments.some((s) => s.startIndex === i || s.endIndex === i)
+      const gimbalHeading = d.fly
+        ? `
+        <wpml:waypointGimbalHeadingParam>
+          <wpml:waypointGimbalPitchAngle>${f(w.gimbalPitchDeg, 1)}</wpml:waypointGimbalPitchAngle>
+          <wpml:waypointGimbalYawAngle>0</wpml:waypointGimbalYawAngle>
+        </wpml:waypointGimbalHeadingParam>`
+        : ''
       const height =
         kind === 'template'
           ? `
@@ -224,8 +251,8 @@ function placemarks(mission: Mission, kind: 'template' | 'waylines', d: Dialect)
       <Placemark>
         <Point><coordinates>${f(w.position[0])},${f(w.position[1])}</coordinates></Point>
         <wpml:index>${i}</wpml:index>${height}
-        <wpml:waypointSpeed>${f(w.speedMs, 1)}</wpml:waypointSpeed>${headingParam(w)}${turnParam()}
-        <wpml:useStraightLine>1</wpml:useStraightLine>${actionGroups(mission, i, nextGroupId, d)}
+        <wpml:waypointSpeed>${f(w.speedMs, 1)}</wpml:waypointSpeed>${headingParam(w, d)}${turnParam(stop, d)}
+        <wpml:useStraightLine>${d.fly ? 0 : 1}</wpml:useStraightLine>${actionGroups(mission, i, nextGroupId, nextActionId, d)}${gimbalHeading}
       </Placemark>`
     })
     .join('')
