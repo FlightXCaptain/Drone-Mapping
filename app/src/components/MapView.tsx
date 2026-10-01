@@ -128,6 +128,8 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
   const midMarkers = useRef<maplibregl.Marker[]>([])
   const fixed = useRef<Record<string, maplibregl.Marker>>({})
   const chips = useRef<maplibregl.Marker[]>([])
+  const inspectMarkers = useRef<maplibregl.Marker[]>([])
+  const inspected = usePlanner((s) => s.inspected)
   const activePartId = usePlanner((s) => s.activePartId)
   const onMap = useRef(new Set<string>())
   const startDragging = useRef(false)
@@ -152,7 +154,7 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right')
 
     map.on('load', () => {
-      for (const id of ['others', 'area', 'orbit-disc', 'orbit-ring', 'mission-path', 'active-path', 'mission-photos']) {
+      for (const id of ['others', 'area', 'orbit-disc', 'orbit-ring', 'mission-path', 'active-path', 'mission-photos', 'inspect']) {
         map.addSource(id, { type: 'geojson', data: EMPTY })
       }
       // Other parts of the mission: faint, and not draggable (tap their number chip to edit).
@@ -177,6 +179,9 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
           'circle-stroke-width': 0.5,
         },
       })
+      // Mission read back from the controller/file: cyan, drawn over everything for checking.
+      map.addLayer({ id: 'inspect-casing', type: 'line', source: 'inspect', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.5 } })
+      map.addLayer({ id: 'inspect-line', type: 'line', source: 'inspect', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#22d3ee', 'line-width': 3, 'line-dasharray': [2, 1] } })
       // Invisible, finger-wide hit areas over thin lines.
       map.addLayer({ id: 'others-hit', type: 'line', source: 'others', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
       map.addLayer({ id: 'path-hit', type: 'line', source: 'active-path', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
@@ -524,6 +529,31 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
     const outer = Math.max(...rings.map((r) => r.radiusM ?? radiusM))
     place('edge', missionType === 'orbit' && orbitCenter ? offset(orbitCenter, 90, outer) : null)
   }, [ready, mission, activeMission, parts, activePartId, missionType, area, angleDeg, orbitCenter, radiusM, rings])
+
+  // ---- Mission check overlay ------------------------------------------------------------------
+  useEffect(() => {
+    if (!ready) return
+    const map = mapRef.current!
+    inspectMarkers.current.forEach((m) => m.remove())
+    inspectMarkers.current = []
+    const src = map.getSource('inspect') as GeoJSONSource
+    if (!inspected) return void src.setData(EMPTY)
+    const pts = inspected.read.waypoints
+    src.setData(fc([feat({ type: 'LineString', coordinates: pts.map((w) => w.position) })]))
+    pts.forEach((w, i) => {
+      const m = new maplibregl.Marker({ element: el('wp-num', `Waypoint ${i + 1}: ${w.heightM} m${w.photo ? ', photo' : ''}`, String(i + 1)) })
+      inspectMarkers.current.push(m.setLngLat(w.position).addTo(map))
+    })
+    const lngs = pts.map((w) => w.position[0])
+    const lats = pts.map((w) => w.position[1])
+    map.fitBounds(
+      [
+        [Math.min(...lngs), Math.min(...lats)],
+        [Math.max(...lngs), Math.max(...lats)],
+      ],
+      { padding: { top: 80, bottom: 160, left: 380, right: 460 }, maxZoom: 19, duration: 600 },
+    )
+  }, [inspected, ready])
 
   // ---- Basemap & fly-to ------------------------------------------------------------------------
   useEffect(() => {
