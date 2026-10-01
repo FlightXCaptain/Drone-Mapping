@@ -26,7 +26,7 @@ function hint(s: ReturnType<typeof usePlanner.getState>): string {
       : 'Outline the site to plan a mapping flight.'
   }
   return s.orbitCenter
-    ? 'Drag inside to move, drag the ring to resize.'
+    ? 'Drag inside to move, the ring to resize, and Start around the ring to rotate.'
     : 'Place the subject to plan an orbit.'
 }
 
