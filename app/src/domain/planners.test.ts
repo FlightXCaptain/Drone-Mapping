@@ -82,3 +82,19 @@ describe('orbit planner', () => {
     }
   })
 })
+
+describe('route start', () => {
+  it('grid starts at the entry corner nearest startNear', () => {
+    for (const corner of RECT.slice(0, 4)) {
+      const m = planGrid(RECT, drone, { ...defaultGridParams, overshootM: 0, startNear: corner })
+      expect(distanceM(m.waypoints[0].position, corner)).toBeLessThan(40)
+    }
+  })
+
+  it('orbit starts at startBearingDeg', () => {
+    const c: LngLat = [115.85, -31.95]
+    const m = planOrbit(c, drone, { ...defaultOrbitParams, startBearingDeg: 90 })
+    expect(m.waypoints[0].position[0]).toBeGreaterThan(c[0]) // east of centre
+    expect(m.waypoints[0].position[1]).toBeCloseTo(c[1], 5)
+  })
+})

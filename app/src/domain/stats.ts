@@ -65,7 +65,13 @@ export function missionStats(
   if (mission.intervalSegments.length && drone.exportTargets.includes('djifly')) {
     warnings.push('DJI Fly may ignore distance-interval shooting. Switch Photo trigger to "Waypoint per photo" for a reliable capture.')
   }
-  const maxAlt =Math.max(0, ...wps.map((w) => w.altitudeM))
+  const batteries = wps.length ? estimateBatteries(duration, drone) : 0
+  if (batteries > 4) {
+    warnings.push(
+      `This flight needs ${batteries} batteries. Check the area is drawn around the site you mean, or split it into smaller flights.`,
+    )
+  }
+  const maxAlt = Math.max(0, ...wps.map((w) => w.altitudeM))
   if (maxAlt > 120) warnings.push(`Max altitude ${maxAlt} m exceeds the common 120 m (400 ft) regulatory ceiling.`)
 
   return {
@@ -73,7 +79,7 @@ export function missionStats(
     durationS: duration,
     photoCount: mission.photoPoints.length,
     waypointCount: wps.length,
-    batteries: wps.length ? estimateBatteries(duration, drone) : 0,
+    batteries,
     gsdCm: wps.length ? gsdCm(drone.camera, cameraDistanceM ?? wps[0].altitudeM) : null,
     areaM2,
     warnings,

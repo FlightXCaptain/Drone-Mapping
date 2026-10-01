@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { usePlanner } from '../store'
 import type { DroneProfile, ExportTarget } from '../domain/types'
+import { Dialog } from './Dialog'
 
-const BLANK: DroneProfile = {
-  id: '',
+const BLANK: Omit<DroneProfile, 'id'> = {
   name: '',
   builtin: false,
   camera: { sensorWidthMm: 13.2, sensorHeightMm: 8.8, focalLengthMm: 8.8, imageWidthPx: 5472, imageHeightPx: 3648 },
@@ -15,103 +15,133 @@ const BLANK: DroneProfile = {
 }
 
 const TARGETS: [ExportTarget, string][] = [
-  ['pilot2', 'DJI Pilot 2 (Enterprise KMZ)'],
-  ['djifly', 'DJI Fly (KMZ file swap)'],
-  ['litchi', 'Litchi CSV'],
+  ['pilot2', 'DJI Pilot 2'],
+  ['djifly', 'DJI Fly'],
+  ['litchi', 'Litchi'],
 ]
 
-/** Create or edit a client-defined aircraft. Camera numbers come from the spec sheet or a photo's EXIF. */
-export function DroneEditor({ initial, onClose }: { initial: DroneProfile | null; onClose: () => void }) {
-  const save = usePlanner((s) => s.saveCustomDrone)
-  const remove = usePlanner((s) => s.deleteCustomDrone)
-  const [d, setD] = useState<DroneProfile>(initial ?? { ...BLANK, id: crypto.randomUUID() })
+type NumPath =
+  | `camera.${keyof DroneProfile['camera']}`
+  | 'maxSpeedMs'
+  | 'flightTimeMin'
+  | 'minPhotoIntervalS'
+  | 'maxWaypoints'
 
-  const num = (path: string, label: string, step = 0.1) => {
-    const [group, key] = path.includes('.') ? path.split('.') : [null, path]
-    const value = group ? (d as any)[group][key] : (d as any)[key]
-    return (
-      <label className="field inline">
-        <span>{label}</span>
-        <input
-          type="number"
-          step={step}
-          value={value}
-          onChange={(e) => {
-            const v = Number(e.target.value)
-            setD((prev) => (group ? { ...prev, [group]: { ...(prev as any)[group], [key]: v } } : { ...prev, [key]: v }))
-          }}
-        />
-      </label>
-    )
-  }
+/** Add or edit a client's aircraft. Camera numbers come from the spec sheet or a photo's EXIF data. */
+export function DroneEditor({ initial }: { initial: DroneProfile | null }) {
+  const { saveCustomDrone, deleteCustomDrone, setDroneEditor } = usePlanner.getState()
+  const close = () => setDroneEditor(null)
+  const [d, setD] = useState<DroneProfile>(initial ?? { ...BLANK, id: crypto.randomUUID() })
+  const existing = usePlanner((s) => s.customDrones.some((x) => x.id === d.id))
+
+  const get = (p: NumPath) => (p.startsWith('camera.') ? d.camera[p.slice(7) as keyof DroneProfile['camera']] : d[p as keyof DroneProfile]) as number
+  const put = (p: NumPath, v: number) =>
+    setD((prev) => (p.startsWith('camera.') ? { ...prev, camera: { ...prev.camera, [p.slice(7)]: v } } : { ...prev, [p]: v }))
+
+  const num = (p: NumPath, label: string, unit: string, step = 0.1) => (
+    <label className="inline">
+      <span>{label}</span>
+      <span className="unit-input">
+        <input type="number" inputMode="decimal" step={step} value={get(p)} onChange={(e) => put(p, Number(e.target.value))} />
+        {unit}
+      </span>
+    </label>
+  )
 
   const wpml = d.wpml ?? { droneEnumValue: 0, droneSubEnumValue: 0, payloadEnumValue: 0, payloadSubEnumValue: 0 }
+  const needsWpml = d.exportTargets.includes('pilot2') || d.exportTargets.includes('djifly')
 
   return (
-    <div className="editor">
-      <label className="field inline">
-        <span>Name</span>
-        <input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="e.g. Client's Air 3S" />
-      </label>
-      <h3>Camera</h3>
-      {num('camera.sensorWidthMm', 'Sensor width (mm)')}
-      {num('camera.sensorHeightMm', 'Sensor height (mm)')}
-      {num('camera.focalLengthMm', 'Focal length, real (mm)')}
-      {num('camera.imageWidthPx', 'Image width (px)', 1)}
-      {num('camera.imageHeightPx', 'Image height (px)', 1)}
-      <h3>Performance</h3>
-      {num('maxSpeedMs', 'Max speed (m/s)', 0.5)}
-      {num('flightTimeMin', 'Rated flight time (min)', 1)}
-      {num('minPhotoIntervalS', 'Min photo interval (s)', 0.1)}
-      {num('maxWaypoints', 'Max waypoints', 1)}
-      <h3>Export</h3>
-      {TARGETS.map(([t, label]) => (
-        <label key={t} className="check">
-          <input
-            type="checkbox"
-            checked={d.exportTargets.includes(t)}
-            onChange={(e) =>
-              setD({ ...d, exportTargets: e.target.checked ? [...d.exportTargets, t] : d.exportTargets.filter((x) => x !== t) })
-            }
-          />
-          {label}
+    <Dialog title={existing ? 'Edit aircraft' : 'Add aircraft'} onClose={close}>
+      <form
+        className="drone-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          saveCustomDrone({ ...d, builtin: false })
+          close()
+        }}
+      >
+        <label className="stack">
+          <span>Name</span>
+          <input required value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} placeholder="e.g. Site team Air 3S" />
         </label>
-      ))}
-      {(d.exportTargets.includes('pilot2') || d.exportTargets.includes('djifly')) && (
-        <div className="wpml-ids">
-          <small className="hint">WPML IDs identify the aircraft inside the KMZ. Copy them from a mission saved on the controller if unsure.</small>
-          {(['droneEnumValue', 'droneSubEnumValue', 'payloadEnumValue', 'payloadSubEnumValue'] as const).map((k) => (
-            <label key={k} className="field inline">
-              <span>{k}</span>
-              <input type="number" value={wpml[k]} onChange={(e) => setD({ ...d, wpml: { ...wpml, [k]: Number(e.target.value) } })} />
-            </label>
-          ))}
-        </div>
-      )}
-      <div className="row">
-        <button
-          className="primary"
-          disabled={!d.name.trim() || d.exportTargets.length === 0}
-          onClick={() => {
-            save({ ...d, builtin: false })
-            onClose()
-          }}
-        >
-          Save aircraft
-        </button>
-        {initial && !initial.builtin && (
-          <button
-            className="danger"
-            onClick={() => {
-              remove(d.id)
-              onClose()
-            }}
-          >
-            Delete
+
+        <fieldset>
+          <legend>Camera</legend>
+          {num('camera.sensorWidthMm', 'Sensor width', 'mm')}
+          {num('camera.sensorHeightMm', 'Sensor height', 'mm')}
+          {num('camera.focalLengthMm', 'Focal length (real, not 35 mm equivalent)', 'mm')}
+          {num('camera.imageWidthPx', 'Photo width', 'px', 1)}
+          {num('camera.imageHeightPx', 'Photo height', 'px', 1)}
+        </fieldset>
+
+        <fieldset>
+          <legend>Flight</legend>
+          {num('flightTimeMin', 'Rated flight time', 'min', 1)}
+          {num('maxSpeedMs', 'Top speed', 'm/s', 0.5)}
+          {num('minPhotoIntervalS', 'Fastest photo interval', 's')}
+          {num('maxWaypoints', 'Waypoint limit', '', 1)}
+        </fieldset>
+
+        <fieldset>
+          <legend>Flight apps</legend>
+          <div className="checks">
+            {TARGETS.map(([t, label]) => (
+              <label key={t} className="toggle">
+                <input
+                  type="checkbox"
+                  checked={d.exportTargets.includes(t)}
+                  onChange={(e) =>
+                    setD({ ...d, exportTargets: e.target.checked ? [...d.exportTargets, t] : d.exportTargets.filter((x) => x !== t) })
+                  }
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          {needsWpml && (
+            <details className="more">
+              <summary>DJI aircraft codes</summary>
+              <p className="slider-note">These identify the aircraft inside DJI mission files. If unsure, copy them from a mission saved on your controller.</p>
+              {(
+                [
+                  ['droneEnumValue', 'Aircraft code'],
+                  ['droneSubEnumValue', 'Aircraft variant'],
+                  ['payloadEnumValue', 'Camera code'],
+                  ['payloadSubEnumValue', 'Camera variant'],
+                ] as const
+              ).map(([k, label]) => (
+                <label key={k} className="inline">
+                  <span>{label}</span>
+                  <input type="number" value={wpml[k]} onChange={(e) => setD({ ...d, wpml: { ...wpml, [k]: Number(e.target.value) } })} />
+                </label>
+              ))}
+            </details>
+          )}
+        </fieldset>
+
+        <div className="dialog-actions">
+          {existing && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => {
+                deleteCustomDrone(d.id)
+                close()
+              }}
+            >
+              Delete aircraft
+            </button>
+          )}
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={close}>
+            Cancel
           </button>
-        )}
-        <button onClick={onClose}>Cancel</button>
-      </div>
-    </div>
+          <button type="submit" className="btn btn-primary" disabled={!d.name.trim() || d.exportTargets.length === 0}>
+            Save aircraft
+          </button>
+        </div>
+      </form>
+    </Dialog>
   )
 }

@@ -41,11 +41,11 @@ export function PlaceSearch({ onPick }: { onPick: (c: LngLat) => void }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search place or paste lat, lng"
+          placeholder="Search places or coordinates"
           aria-label="Search location"
         />
         <button type="submit" disabled={busy}>
-          {busy ? '…' : 'Go'}
+          {busy ? "Searching" : "Search"}
         </button>
       </form>
       {results.length > 0 && (
