@@ -59,5 +59,7 @@ export default defineConfig({
   server: {
     // Reachable from a phone on the same Wi-Fi, so QR links work during development.
     host: true,
+    // Don't watch the Rust/Tauri build output: a desktop build locks files there and crashes the watcher.
+    watch: { ignored: ['**/src-tauri/**'] },
   },
 })
