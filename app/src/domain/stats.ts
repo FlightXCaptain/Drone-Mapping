@@ -6,20 +6,16 @@ const CLIMB_RATE_MS = 4 // conservative average for DJI ascent/descent
 const STOP_PER_PHOTO_WAYPOINT_S = 2 // decelerate, stabilise, shoot, accelerate
 const TURN_S = 4 // per change of line/segment direction
 
+/** Every flight lands with at least this much battery left. */
+export const BATTERY_RESERVE = 0.2
+
 /**
- * How many batteries the mission needs.
- *
- * `flightSeconds` is the estimated airborne time. `drone.flightTimeMin` is the
- * manufacturer's rated figure, which is measured in still air on a fresh battery,
- * and real missions should never plan to land on 0%.
- *
- * TODO(you): decide the reserve policy. Things to weigh:
- *  - Usable fraction of rated time (wind, cold, battery age) – commonly 0.6–0.8.
- *  - A fixed landing reserve (e.g. land at 20–30%) vs. a percentage.
- *  - Always return at least 1 for a non-empty mission.
+ * How many batteries the mission needs, planning to land each one at 20%.
+ * `drone.flightTimeMin` is the manufacturer's rated (still-air, fresh battery) figure.
  */
 export function estimateBatteries(flightSeconds: number, drone: DroneProfile): number {
-  return Math.max(1, Math.ceil(flightSeconds / (drone.flightTimeMin * 60)))
+  const usableSeconds = drone.flightTimeMin * 60 * (1 - BATTERY_RESERVE)
+  return Math.max(1, Math.ceil(flightSeconds / usableSeconds))
 }
 
 /**
