@@ -4,6 +4,7 @@ import { planUrl } from '../share'
 import { copyText } from '../util'
 import { buildKmz } from '../export/wpml'
 import { buildLitchiCsv } from '../export/litchi'
+import { readKmz } from '../export/readWpml'
 import { useCurrentDrone, usePlanner } from '../store'
 import type { ExportTarget, Mission } from '../domain/types'
 import { Dialog } from './Dialog'
@@ -173,6 +174,22 @@ export function SendDialog({ mission }: { mission: Mission }) {
         </section>
       )}
       {touch && <HandOff compact />}
+      <label className="file-check">
+        <span>Check a mission file on the map</span>
+        <input
+          type="file"
+          accept=".kmz"
+          onChange={async (e) => {
+            const file = e.target.files?.[0]
+            if (!file) return
+            try {
+              usePlanner.getState().setInspected({ read: await readKmz(file), source: `File: ${file.name}` })
+            } catch (err) {
+              setError(err instanceof Error ? err.message : String(err))
+            }
+          }}
+        />
+      </label>
       <p className="fine">Always check the route in the flight app before take-off. You are responsible for every flight.</p>
     </Dialog>
   )

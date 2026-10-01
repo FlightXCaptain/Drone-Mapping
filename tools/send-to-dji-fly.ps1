@@ -35,6 +35,10 @@
 .PARAMETER Restore
   Put a backup .kmz (from Documents\Drone Mapping\backups) back onto the controller. The mission
   UUID is read from the backup's file name.
+.PARAMETER Fetch
+  Read-only: copy mission -Mission's KMZ off the controller to -Out (for checking it on a map).
+.PARAMETER Out
+  Where -Fetch saves the copy.
 .PARAMETER Json
   For the Drone Mapping app: print one '##RESULT {json}' line and never prompt.
 
@@ -50,6 +54,8 @@ param(
   [switch]$WhatIf,
   [switch]$List,
   [string]$Restore,
+  [switch]$Fetch,
+  [string]$Out,
   [switch]$Json
 )
 $ErrorActionPreference = 'Stop'
@@ -134,6 +140,21 @@ if (-not $device) {
 Say "Controller:   $($device.Name)"
 
 $missions = @($waypointDir.Items() | Where-Object { $_.IsFolder -and $_.Name -match $UUID_RE })
+
+# ---- Fetch (read-only): copy one mission's KMZ to this PC ------------------------------------
+if ($Fetch) {
+  if ($Mission -notmatch $UUID_RE) { Fail "$Mission is not a DJI Fly mission id." }
+  if (-not $Out) { Fail 'Fetch needs -Out <file>.' }
+  $m = $missions | Where-Object { $_.Name -ieq $Mission } | Select-Object -First 1
+  if (-not $m) { Fail "Mission $Mission isn't on the controller." }
+  $item = Get-Child $m.GetFolder "$($m.Name).kmz"
+  if (-not $item) { Fail "Mission $Mission has no KMZ file." }
+  try { $copied = Copy-FromDevice $item (Join-Path $script:tmp 'fetch') } catch { Fail $_.Exception.Message }
+  Copy-Item $copied $Out -Force
+  Remove-Item -Recurse -Force $script:tmp
+  Result @{ ok = $true; mission = $m.Name }
+  exit 0
+}
 
 # ---- Inventory (read-only) -------------------------------------------------------------------
 $rows = @()

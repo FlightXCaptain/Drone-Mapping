@@ -4,13 +4,14 @@
  * dev/preview server and calls tools/send-to-dji-fly.ps1.
  *
  *   GET  /api/rc        → controller + DJI Fly missions on it
+ *   GET  /api/rc/mission/<uuid> → read-only copy of that mission's KMZ (base64)
  *   POST /api/rc/send   → { kmzBase64, mission, whatIf? } replaces that mission's KMZ
  *
  * Only requests from this PC itself are accepted, so nobody else on the network can write to a
  * plugged-in controller.
  */
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -106,6 +107,19 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   try {
     if (req.method === 'GET' && req.url === '/api/rc') {
       return json(res, 200, await runScript(['-List']))
+    }
+    const fetchMatch = req.method === 'GET' && req.url?.match(/^\/api\/rc\/mission\/([0-9A-Fa-f-]{36})$/)
+    if (fetchMatch) {
+      // Read-only copy of what's on the controller, so the app can show it on a map.
+      const dir = await mkdtemp(join(tmpdir(), 'drone-mapping-'))
+      const file = join(dir, 'fetched.kmz')
+      try {
+        const r = await runScript(['-Fetch', '-Mission', fetchMatch[1], '-Out', file])
+        if (!r.ok) return json(res, 200, r)
+        return json(res, 200, { ok: true, mission: fetchMatch[1], kmzBase64: (await readFile(file)).toString('base64') })
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+      }
     }
     if (req.method === 'POST' && req.url === '/api/rc/send') {
       const { kmzBase64, mission, whatIf } = JSON.parse(await readBody(req)) as { kmzBase64: string; mission: string; whatIf?: boolean }

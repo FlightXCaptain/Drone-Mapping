@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { buildKmz } from '../export/wpml'
+import { readKmz } from '../export/readWpml'
+import { usePlanner } from '../store'
 import type { DroneProfile, Mission } from '../domain/types'
 
 interface RcMission {
@@ -53,6 +55,25 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   useEffect(() => {
     check()
   }, [check])
+
+  const [checking, setChecking] = useState(false)
+  async function inspect() {
+    setChecking(true)
+    setResult(null)
+    try {
+      const res = await fetch(`/api/rc/mission/${slot}`, { headers: BRIDGE_HEADERS })
+      const body = await res.json()
+      if (!body.ok) throw new Error(body.error)
+      const bytes = Uint8Array.from(atob(body.kmzBase64), (c) => c.charCodeAt(0))
+      const read = await readKmz(bytes.buffer)
+      const idx = status.kind === 'ready' ? status.missions.findIndex((m) => m.id === slot) + 1 : 0
+      usePlanner.getState().setInspected({ read, source: `On ${status.kind === 'ready' ? status.device : 'the controller'}, mission ${idx}, read just now` })
+    } catch (e) {
+      setResult({ ok: false, text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setChecking(false)
+    }
+  }
 
   async function send() {
     setSending(true)
@@ -112,6 +133,9 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
               {sending ? 'Sending…' : `Send to ${status.device}`}
             </button>
           </div>
+          <button className="btn" disabled={!slot || checking || sending} onClick={inspect}>
+            {checking ? 'Reading the controller…' : 'Check what’s on the controller'}
+          </button>
           {status.missions.length === 1 && (
             <p className="fine">Tip: save a few short missions in DJI Fly to use as slots, so a new send doesn't replace your only one.</p>
           )}

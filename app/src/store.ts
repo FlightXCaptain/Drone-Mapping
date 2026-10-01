@@ -7,6 +7,13 @@ import { aimPitch, autoRings, defaultOrbitParams, ringRadius, type OrbitParams }
 import type { DroneProfile, LngLat } from './domain/types'
 import type { OrbitRing } from './domain/planners/orbit'
 import type { SharedPart, SharedPlan } from './share'
+import type { ReadMission } from './export/readWpml'
+
+/** A mission read back from the controller or a file, shown on the map for checking. */
+export interface Inspected {
+  read: ReadMission
+  source: string
+}
 
 export type MissionType = 'grid' | 'orbit'
 /** Only used while sketching something new; existing shapes are always directly editable. */
@@ -82,6 +89,7 @@ export interface PlannerState {
   drawTool: DrawTool
   sendOpen: boolean
   droneEditor: DroneProfile | 'new' | null
+  inspected: Inspected | null
 
   setDrone: (id: string) => void
   saveCustomDrone: (d: DroneProfile) => void
@@ -100,6 +108,7 @@ export interface PlannerState {
   setDrawTool: (t: DrawTool) => void
   setSendOpen: (o: boolean) => void
   setDroneEditor: (d: DroneProfile | 'new' | null) => void
+  setInspected: (i: Inspected | null) => void
   addPart: (t: MissionType) => void
   selectPart: (id: string) => void
   removePart: (id: string) => void
@@ -126,6 +135,7 @@ export const usePlanner = create<PlannerState>()(
       drawTool: null,
       sendOpen: false,
       droneEditor: null,
+      inspected: null,
 
       setDrone: (droneId) => set({ droneId }),
       saveCustomDrone: (d) =>
@@ -190,6 +200,7 @@ export const usePlanner = create<PlannerState>()(
       setDrawTool: (drawTool) => set({ drawTool }),
       setSendOpen: (sendOpen) => set({ sendOpen }),
       setDroneEditor: (droneEditor) => set({ droneEditor }),
+      setInspected: (inspected) => set({ inspected, sendOpen: inspected ? false : get().sendOpen }),
       addPart: (missionType) =>
         set((s) => {
           const parts = currentParts(s)
@@ -254,7 +265,7 @@ export const usePlanner = create<PlannerState>()(
     {
       name: 'drone-planner',
       version: 3,
-      partialize: ({ drawTool: _t, sendOpen: _s, droneEditor: _d, ...rest }) => rest,
+      partialize: ({ drawTool: _t, sendOpen: _s, droneEditor: _d, inspected: _i, ...rest }) => rest,
       // Fill in any settings added since the plan was saved.
       migrate: (persisted) => {
         const s = persisted as Partial<PlannerState>

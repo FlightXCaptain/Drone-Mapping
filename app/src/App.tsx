@@ -7,6 +7,7 @@ import { SendDialog } from './components/SendDialog'
 import { DroneEditor } from './components/DroneEditor'
 import { PlaceSearch } from './components/PlaceSearch'
 import { SharedPlanPrompt } from './components/SharedPlanPrompt'
+import { InspectPanel } from './components/InspectPanel'
 import { currentParts, useCurrentDrone, usePlanner } from './store'
 import { planAll } from './plan'
 import type { LngLat } from './domain/types'
@@ -59,6 +60,7 @@ export default function App() {
       </div>
 
       {s.sendOpen && mission && <SendDialog mission={mission} />}
+      <InspectPanel plan={mission} onFocus={(c) => setFlyTo([...c])} />
       <SharedPlanPrompt onOpened={(c) => c && setFlyTo([...c])} />
       {s.droneEditor && <DroneEditor initial={s.droneEditor === 'new' ? null : s.droneEditor} />}
     </div>
