@@ -317,3 +317,33 @@ p.hint {
     border-top: 1px solid var(--border);
   }
 }
+
+/* Orbit drag handles – sized for fingers/gloves (44px hit area, smaller visible dot). */
+.map-handle {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+}
+.map-handle:active {
+  cursor: grabbing;
+}
+.map-handle::after {
+  content: '';
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.5);
+}
+.orbit-centre::after {
+  width: 22px;
+  height: 22px;
+  background: #ffd400;
+}
+.orbit-edge::after {
+  width: 16px;
+  height: 16px;
+  background: #0f766e;
+}
