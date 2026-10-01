@@ -69,7 +69,16 @@ fn run_script(app: &AppHandle, args: &[&str]) -> Value {
         .lines()
         .find_map(|l| l.strip_prefix("##RESULT "))
         .and_then(|j| serde_json::from_str(j).ok())
-        .unwrap_or_else(|| fail("No response from the controller helper."))
+        .unwrap_or_else(|| {
+            // No result line: the helper couldn't run (e.g. a script policy). Show why.
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail: String = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect::<Vec<_>>().join(" ");
+            fail(if detail.is_empty() {
+                "No response from the controller helper.".to_string()
+            } else {
+                format!("The controller helper couldn't run: {detail}")
+            })
+        })
 }
 
 async fn locked<F>(lock: &ControllerLock, work: F) -> Value

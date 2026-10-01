@@ -69,6 +69,8 @@ $logFile = Join-Path $dataDir 'send-log.txt'
 New-Item -ItemType Directory -Force $backupDir | Out-Null
 
 function Log($msg) { Add-Content -Path $logFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $msg" }
+Log ("--- {0} on {1}: PowerShell {2}, {3}, exec policy {4}" -f $(if ($List) { 'list' } elseif ($Fetch) { 'fetch' } elseif ($Restore) { 'restore' } elseif ($WhatIf) { 'dry run' } else { 'send' }),
+  $env:COMPUTERNAME, $PSVersionTable.PSVersion, $ExecutionContext.SessionState.LanguageMode, (Get-ExecutionPolicy))
 function Result($obj) { if ($Json) { Write-Output ('##RESULT ' + ($obj | ConvertTo-Json -Compress -Depth 4)) } }
 function Say($msg) { if (-not $Json) { Write-Host $msg } }
 function Fail($msg) {
@@ -110,13 +112,36 @@ New-Item -ItemType Directory $script:tmp | Out-Null
 function Get-Child($folder, [string]$name) {
   return $folder.Items() | Where-Object { $_.Name -ceq $name } | Select-Object -First 1
 }
+# Shell copies run in the background: the file appears as soon as the copy STARTS. Reading it
+# then gets a half-written file on slower PCs/ports. Wait until it exists, Windows has released
+# it, and its size has stopped changing.
+function Wait-FileComplete([string]$path, [int]$timeoutSec = 90) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  $lastLen = -1
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path -LiteralPath $path) {
+      $len = (Get-Item -LiteralPath $path).Length
+      $unlocked = $false
+      try {
+        $fs = [IO.File]::Open($path, 'Open', 'Read', 'None')
+        $fs.Close(); $unlocked = $true
+      } catch { }
+      if ($unlocked -and $len -gt 0 -and $len -eq $lastLen) { return $true }
+      $lastLen = $len
+    }
+    Start-Sleep -Milliseconds 400
+  }
+  return $false
+}
 function Copy-FromDevice($item, [string]$toDir) {
   New-Item -ItemType Directory -Force $toDir | Out-Null
+  $started = Get-Date
   $shell.Namespace($toDir).CopyHere($item, 0x14)
   $target = Join-Path $toDir $item.Name
-  for ($i = 0; $i -lt 150 -and -not (Test-Path $target); $i++) { Start-Sleep -Milliseconds 200 }
-  Start-Sleep -Milliseconds 300
-  if (-not (Test-Path $target)) { throw "couldn't read $($item.Name) from the controller" }
+  if (-not (Wait-FileComplete $target)) {
+    throw "timed out reading $($item.Name) from the controller (try another USB port or cable)"
+  }
+  Log ("Read $($item.Name) ({0} bytes) in {1:n1} s" -f (Get-Item -LiteralPath $target).Length, ((Get-Date) - $started).TotalSeconds)
   return $target
 }
 
@@ -248,7 +273,7 @@ function Remove-FromDevice() {
   for ($i = 0; $i -lt 100 -and (Get-Child $targetDir $fileName); $i++) { Start-Sleep -Milliseconds 200 }
   if (Get-Child $targetDir $fileName) { throw "the old file couldn't be moved off the controller" }
   $moved = Join-Path $dir $fileName
-  for ($i = 0; $i -lt 50 -and -not (Test-Path $moved); $i++) { Start-Sleep -Milliseconds 200 }
+  if (-not (Wait-FileComplete $moved)) { return $null }
   return $moved
 }
 function Put-File([string]$source) {
@@ -263,10 +288,21 @@ function Get-DeviceHash() {
   if (-not $item) { return $null }
   try { return (Get-FileHash (Copy-FromDevice $item (New-EmptyDir))).Hash } catch { return $null }
 }
+# A slow controller can still be finishing its write when we first read back, so keep checking
+# for a while before calling it a mismatch.
+function Wait-DeviceHash([string]$want, [int]$timeoutSec = 45) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  do {
+    $got = Get-DeviceHash
+    if ($got -eq $want) { return $got }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  return $got
+}
 function Restore-Backup() {
   try { if (Get-Child $targetDir $fileName) { $null = Remove-FromDevice } } catch { return $false }
   Put-File $backup
-  return ((Get-DeviceHash) -eq $backupHash)
+  return ((Wait-DeviceHash $backupHash) -eq $backupHash)
 }
 
 $wantHash = (Get-FileHash $Kmz).Hash
@@ -285,7 +321,7 @@ Log "Old file moved off the controller (matches backup)."
 
 # Step 2: copy the new file in and verify it byte for byte.
 Put-File $Kmz
-$gotHash = Get-DeviceHash
+$gotHash = Wait-DeviceHash $wantHash
 if ($gotHash -ne $wantHash) {
   Log "Verify failed (got $gotHash). Restoring backup."
   $restored = Restore-Backup

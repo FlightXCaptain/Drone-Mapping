@@ -37,10 +37,19 @@ function runScript(args: string[]): Promise<Record<string, unknown>> {
       'powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT, '-Json', ...args],
       { timeout: 120_000, windowsHide: true },
-      (err, stdout) => {
+      (err, stdout, stderr) => {
         const line = stdout.split(/\r?\n/).find((l) => l.startsWith('##RESULT '))
         if (line) return done(JSON.parse(line.slice(9)))
-        done({ ok: false, error: err ? `The controller helper failed: ${err.message}` : 'No response from the controller helper.' })
+        // No result line: the helper couldn't run (e.g. a script policy). Show why.
+        const detail = stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 3).join(' ')
+        done({
+          ok: false,
+          error: detail
+            ? `The controller helper couldn't run: ${detail}`
+            : err
+              ? `The controller helper failed: ${err.message}`
+              : 'No response from the controller helper.',
+        })
       },
     )
   })
