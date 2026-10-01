@@ -1,0 +1,49 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Drone Mapping",
+  "version": "0.1.0",
+  "identifier": "com.flightxcaptain.dronemapping",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Drone Mapping",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "publisher": "FlightXCaptain",
+    "copyright": "© 2026 FlightXCaptain",
+    "category": "Utility",
+    "shortDescription": "Plan DJI drone photo missions and send them to the controller",
+    "longDescription": "Plan mapping grids and orbits on a live satellite map, check them, and load them onto DJI controllers (DJI Fly over USB, DJI Pilot 2, Litchi).",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "resources": {
+      "../../tools/send-to-dji-fly.ps1": "tools/send-to-dji-fly.ps1"
+    },
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}

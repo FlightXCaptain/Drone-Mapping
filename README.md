@@ -46,3 +46,18 @@ verifies by hash afterwards and restores automatically on mismatch. Every action
 
 In the app, **Send to drone** shows *Send to DJI RC 2* when the app is opened on the PC the
 controller is plugged into (served by `npm run dev` / `npm run preview`).
+
+## Desktop app (Windows installer)
+
+The planner also ships as a native Windows app (Tauri) with an MSI installer. In the desktop app,
+"Send to DJI RC 2" talks to the controller through built-in commands. There's no local web
+server, so nothing else on the PC or network can reach it.
+
+```bash
+cd app
+npm run desktop          # run the desktop app in development
+npm run desktop:build    # build → app/src-tauri/target/release/bundle/msi/Drone Mapping_<version>_x64_en-US.msi
+```
+
+Building needs Rust (rustup) and downloads the WiX toolset on first build. The installer adds a
+Start-menu entry and installs Microsoft Edge WebView2 if it's missing (it's built into Windows 11).

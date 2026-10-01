@@ -15,6 +15,8 @@ export default defineConfig({
     // site you looked at before leaving still shows with no signal.
     VitePWA({
       registerType: 'autoUpdate',
+      // Registered from main.tsx, and only in the browser: the desktop app ships its files locally.
+      injectRegister: null,
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Drone Mapping',

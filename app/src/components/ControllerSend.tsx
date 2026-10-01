@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { buildKmz } from '../export/wpml'
 import { readKmz } from '../export/readWpml'
 import { usePlanner } from '../store'
+import { rcFetch, rcList, rcSend } from '../bridge'
 import type { DroneProfile, Mission } from '../domain/types'
 
 interface RcMission {
@@ -14,9 +15,6 @@ type Status =
   | { kind: 'absent'; error: string }
   | { kind: 'ready'; device: string; missions: RcMission[] }
 
-/** Required by the bridge; cross-site pages can't send it without a preflight it never approves. */
-const BRIDGE_HEADERS = { 'X-Drone-Mapping': '1' }
-
 async function toBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
   let s = ''
@@ -25,8 +23,8 @@ async function toBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * One-click "send to the controller plugged into this PC" for DJI Fly. Talks to the local
- * controller bridge (rc-bridge.ts); hides itself when the app isn't served by it.
+ * One-click "send to the controller plugged into this PC" for DJI Fly, via bridge.ts (built-in
+ * in the desktop app, the dev-server bridge in a browser). Hides itself when there's no route.
  */
 export function ControllerSend({ mission, drone }: { mission: Mission; drone: DroneProfile }) {
   const [status, setStatus] = useState<Status>({ kind: 'checking' })
@@ -39,14 +37,12 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   const check = useCallback(async () => {
     setStatus({ kind: 'checking' })
     try {
-      const res = await fetch('/api/rc', { headers: BRIDGE_HEADERS })
-      if (res.status === 403 || res.status === 404 || res.status === 501 || !res.headers.get('content-type')?.includes('json')) {
-        return setStatus({ kind: 'unavailable' })
-      }
-      const body = await res.json()
-      if (!body.ok) return setStatus({ kind: 'absent', error: body.error })
-      setStatus({ kind: 'ready', device: body.device, missions: body.missions })
-      setSlot((s) => (body.missions.some((m: RcMission) => m.id === s) ? s : (body.missions[0]?.id ?? '')))
+      const body = await rcList()
+      if (!body) return setStatus({ kind: 'unavailable' })
+      if (!body.ok) return setStatus({ kind: 'absent', error: body.error ?? '' })
+      const missions = body.missions as RcMission[]
+      setStatus({ kind: 'ready', device: body.device as string, missions })
+      setSlot((s) => (missions.some((m) => m.id === s) ? s : (missions[0]?.id ?? '')))
     } catch {
       setStatus({ kind: 'unavailable' })
     }
@@ -61,10 +57,9 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
     setChecking(true)
     setResult(null)
     try {
-      const res = await fetch(`/api/rc/mission/${slot}`, { headers: BRIDGE_HEADERS })
-      const body = await res.json()
+      const body = await rcFetch(slot)
       if (!body.ok) throw new Error(body.error)
-      const bytes = Uint8Array.from(atob(body.kmzBase64), (c) => c.charCodeAt(0))
+      const bytes = Uint8Array.from(atob(body.kmzBase64 as string), (c) => c.charCodeAt(0))
       const read = await readKmz(bytes.buffer)
       const idx = status.kind === 'ready' ? status.missions.findIndex((m) => m.id === slot) + 1 : 0
       usePlanner.getState().setInspected({ read, source: `On ${status.kind === 'ready' ? status.device : 'the controller'}, mission ${idx}, read just now` })
@@ -80,18 +75,13 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
     setResult(null)
     try {
       const kmz = await buildKmz(mission, drone, 'djifly')
-      const res = await fetch('/api/rc/send', {
-        method: 'POST',
-        headers: { ...BRIDGE_HEADERS, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kmzBase64: await toBase64(kmz), mission: slot }),
-      })
-      const body = await res.json()
+      const body = await rcSend(await toBase64(kmz), slot)
       setResult(
         body.ok
           ? { ok: true, text: `Sent and verified: ${body.waypoints} waypoints are now in that mission. The old version is backed up on this PC.` }
-          : { ok: false, text: body.error },
+          : { ok: false, text: body.error ?? 'Send failed.' },
       )
-      if (body.ok) setSent({ mission: body.mission, waypoints: body.waypoints })
+      if (body.ok) setSent({ mission: body.mission as string, waypoints: body.waypoints as number })
     } catch (e) {
       setResult({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {

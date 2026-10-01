@@ -9,6 +9,7 @@ import { useCurrentDrone, usePlanner } from '../store'
 import type { ExportTarget, Mission } from '../domain/types'
 import { Dialog } from './Dialog'
 import { ControllerSend } from './ControllerSend'
+import { isDesktop } from '../bridge'
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -151,7 +152,7 @@ export function SendDialog({ mission }: { mission: Mission }) {
   return (
     <Dialog title="Send to drone" onClose={close}>
       {drone.exportTargets.includes('djifly') && <ControllerSend mission={mission} drone={drone} />}
-      {!touch && <HandOff />}
+      {!touch && !isDesktop() && <HandOff />}
       <h3 className="section-title">{touch ? `Save for ${drone.name}` : `Or save it on this device for ${drone.name}`}</h3>
       <div className="targets">
         {drone.exportTargets.map((t) => (
@@ -173,7 +174,7 @@ export function SendDialog({ mission }: { mission: Mission }) {
           </ol>
         </section>
       )}
-      {touch && <HandOff compact />}
+      {touch && !isDesktop() && <HandOff compact />}
       <label className="file-check">
         <span>Check a mission file on the map</span>
         <input
