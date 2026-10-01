@@ -357,7 +357,13 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
       const s = usePlanner.getState()
       const p = fixed.current.start.getLngLat()
       if (s.missionType === 'grid') s.updateGrid({ startNear: [p.lng, p.lat] })
-      else if (s.orbitCenter) s.updateOrbit({ startBearingDeg: Math.round(bearingDeg(s.orbitCenter, [p.lng, p.lat])) })
+      else if (s.orbitCenter) {
+        const bearing = Math.round(bearingDeg(s.orbitCenter, [p.lng, p.lat]))
+        s.updateOrbit({ startBearingDeg: bearing })
+        // Keep the pin on the first ring so dragging it feels like turning a dial.
+        const r0 = s.orbit.rings[0]?.radiusM ?? s.orbit.radiusM
+        fixed.current.start.setLngLat(offset(s.orbitCenter, bearing, r0))
+      }
     })
     // When released, the flag snaps to where the route really starts.
     fixed.current.start.on('dragstart', () => (startDragging.current = true))
