@@ -3,6 +3,7 @@ import { useAllDrones, useCurrentDrone, usePlanner } from '../store'
 import { altitudeForGsd, gsdCm, gridSpacing } from '../domain/photogrammetry'
 import type { DroneProfile } from '../domain/types'
 import { OrbitProfile } from './OrbitProfile'
+import { PartsList } from './PartsList'
 
 interface SliderProps {
   label: string
@@ -281,6 +282,8 @@ export function ControlCard() {
             {drone.builtin ? 'Copy and adjust specs' : 'Edit specs'}
           </button>
         </div>
+
+        <PartsList />
 
         <Choice
           label="Mission type"

@@ -3,26 +3,32 @@ import { decodePlan, encodePlan, planCodeFromLocation, type SharedPlan } from '.
 import { defaultGridParams } from './domain/planners/grid'
 
 const plan: SharedPlan = {
-  v: 1,
+  v: 2,
   name: 'Smith farm north paddock',
-  type: 'grid',
   droneId: 'dji-mini-4-pro',
-  area: [
+  parts: [
+    {
+      type: 'grid',
+      area: [
     [115.8500001234, -31.95],
     [115.852, -31.95],
     [115.852, -31.9509],
     [115.85, -31.9509],
     [115.8500001234, -31.95],
+      ],
+      grid: defaultGridParams,
+    },
+    { type: 'orbit', center: [115.86, -31.95] },
   ],
-  grid: defaultGridParams,
 }
 
 describe('share links', () => {
   it('round-trips a plan', async () => {
     const back = await decodePlan(await encodePlan(plan))
     expect(back.name).toBe(plan.name)
-    expect(back.grid).toEqual(plan.grid)
-    expect(back.area![0][0]).toBeCloseTo(115.8500001, 7)
+    expect(back.parts[0].grid).toEqual(plan.parts[0].grid)
+    expect(back.parts[0].area![0][0]).toBeCloseTo(115.8500001, 7)
+    expect(back.parts[1].type).toBe('orbit')
   })
 
   it('stays small enough for a comfortable QR code', async () => {
