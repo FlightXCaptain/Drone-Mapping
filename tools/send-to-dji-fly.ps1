@@ -209,32 +209,65 @@ if ($WhatIf) {
   exit 0
 }
 
-# ---- Write: overwrite exactly that one file in place, then verify ------------------------------
+# ---- Write ---------------------------------------------------------------------------------------
+# Windows silently skips overwriting an existing file on an MTP device (tested on an RC 2), and a
+# plain delete can raise a confirmation dialog nobody can answer. So: MOVE the old file off the
+# controller into an empty folder on this PC (it leaves the device, no prompt, and doubles as a
+# second backup), then copy the new one in. Every destination is a fresh empty folder, so Windows
+# never has a name clash to ask about.
+function New-EmptyDir() {
+  $d = Join-Path $script:tmp ([guid]::NewGuid()); New-Item -ItemType Directory $d | Out-Null; return $d
+}
+function Remove-FromDevice() {
+  $item = Get-Child $targetDir $fileName
+  if (-not $item) { return $null }
+  $dir = New-EmptyDir
+  $shell.Namespace($dir).MoveHere($item, 0x14)
+  for ($i = 0; $i -lt 100 -and (Get-Child $targetDir $fileName); $i++) { Start-Sleep -Milliseconds 200 }
+  if (Get-Child $targetDir $fileName) { throw "the old file couldn't be moved off the controller" }
+  $moved = Join-Path $dir $fileName
+  for ($i = 0; $i -lt 50 -and -not (Test-Path $moved); $i++) { Start-Sleep -Milliseconds 200 }
+  return $moved
+}
 function Put-File([string]$source) {
-  # Stage under the exact target name and copy over the existing file (0x10 yes-to-all, 0x4 no UI).
-  $stageDir = Join-Path $script:tmp "stage-$([guid]::NewGuid())"
-  New-Item -ItemType Directory $stageDir | Out-Null
-  $staged = Join-Path $stageDir $fileName
+  $staged = Join-Path (New-EmptyDir) $fileName
   Copy-Item $source $staged
   $targetDir.CopyHere($staged, 0x14)
-  Start-Sleep -Seconds 2
+  for ($i = 0; $i -lt 100 -and -not (Get-Child $targetDir $fileName); $i++) { Start-Sleep -Milliseconds 200 }
+  Start-Sleep -Seconds 1
 }
 function Get-DeviceHash() {
   $item = Get-Child $targetDir $fileName
   if (-not $item) { return $null }
-  try { return (Get-FileHash (Copy-FromDevice $item (Join-Path $script:tmp "verify-$([guid]::NewGuid())"))).Hash } catch { return $null }
+  try { return (Get-FileHash (Copy-FromDevice $item (New-EmptyDir))).Hash } catch { return $null }
+}
+function Restore-Backup() {
+  try { if (Get-Child $targetDir $fileName) { $null = Remove-FromDevice } } catch { return $false }
+  Put-File $backup
+  return ((Get-DeviceHash) -eq $backupHash)
 }
 
 $wantHash = (Get-FileHash $Kmz).Hash
 Log "Send: $Kmz [$wantHash] -> $($device.Name) $uuid"
+
+# Step 1: take the old file off the controller (and check it's the one we backed up).
+try { $movedOff = Remove-FromDevice } catch { Fail "Couldn't remove the old mission file ($($_.Exception.Message)). Nothing was changed." }
+if (-not $movedOff -or -not (Test-Path $movedOff) -or (Get-FileHash $movedOff).Hash -ne $backupHash) {
+  # The file left the device but the copy we got doesn't match the backup: put the verified backup back.
+  Log 'Moved-off file did not match the backup; restoring the backup.'
+  $ok = Restore-Backup
+  Fail $(if ($ok) { "Something changed the mission while sending, so the original was put back. Close DJI Fly and try again." }
+         else { "Couldn't put the original back automatically. Run: .\send-to-dji-fly.ps1 -Restore `"$backup`"" })
+}
+Log "Old file moved off the controller (matches backup)."
+
+# Step 2: copy the new file in and verify it byte for byte.
 Put-File $Kmz
 $gotHash = Get-DeviceHash
-
 if ($gotHash -ne $wantHash) {
   Log "Verify failed (got $gotHash). Restoring backup."
-  Put-File $backup
-  $restored = (Get-DeviceHash) -eq $backupHash
-  Log $(if ($restored) { 'Backup restored.' } else { "RESTORE FAILED - backup kept at $backup" })
+  $restored = Restore-Backup
+  Log $(if ($restored) { 'Backup restored and verified.' } else { "RESTORE FAILED - backup kept at $backup" })
   if ($restored) { Fail "The mission didn't copy correctly, so the original was put back. Nothing changed. Try again." }
   Fail "The mission didn't copy correctly and the original couldn't be put back automatically. Run: .\send-to-dji-fly.ps1 -Restore `"$backup`""
 }
