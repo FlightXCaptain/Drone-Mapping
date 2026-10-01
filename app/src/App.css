@@ -1028,3 +1028,10 @@
   color: var(--start);
   font-weight: 600;
 }
+.steps-inline {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

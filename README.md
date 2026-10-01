@@ -28,7 +28,8 @@ npm run build
 ## Loading missions into DJI Fly (RC 2 / RC / Android phone)
 
 DJI Fly has no import, so a mission replaces a placeholder. With the controller **switched on**,
-connected by USB, and **DJI Fly closed**:
+connected by USB, and **DJI Fly fully closed** (restart the controller; DJI Fly caches missions and
+writes its old copy back if it is still running, so also restart it again after sending):
 
 ```powershell
 .\tools\send-to-dji-fly.ps1            # newest .kmz in Downloads → pick the placeholder

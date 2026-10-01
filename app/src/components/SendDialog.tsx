@@ -34,11 +34,11 @@ const TARGETS: Record<ExportTarget, { app: string; file: string; summary: string
     file: 'KMZ',
     summary: 'DJI Fly has no import button, so the file replaces a placeholder mission.',
     steps: [
-      'In DJI Fly, create and save any short waypoint mission as a placeholder. Then close DJI Fly completely.',
+      'In DJI Fly, create and save any short waypoint mission as a placeholder. Then restart the controller so DJI Fly is fully closed.',
       'Switch the controller on and connect it to your Windows PC with a data USB cable.',
       'Easiest: run tools\send-to-dji-fly.ps1 from the Drone Mapping folder. It backs up the placeholder, puts this file in its place and checks it.',
       'By hand instead: open Android/data/dji.go.v5/files/waypoint/<UUID>/ and replace <UUID>.kmz with this file, renamed to that exact name.',
-      'Open DJI Fly and open the mission. Its thumbnail keeps showing the old route; that is normal. Check the route before flying.',
+      'Restart the controller before opening DJI Fly (it caches missions and can write its old copy back). Then open the mission; its thumbnail keeps showing the old route, which is normal.',
     ],
   },
   litchi: {
