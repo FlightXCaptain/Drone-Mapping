@@ -1,0 +1,20 @@
+node_modules/
+dist/
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.log
+coverage/
+
+# Claude Code session memory
+.remember/
+
+# Sample flight data / exports
+*.kmz
+!fixtures/**/*.kmz
