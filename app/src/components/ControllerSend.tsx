@@ -119,7 +119,7 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
             <select value={slot} onChange={(e) => setSlot(e.target.value)} aria-label="Placeholder mission to replace">
               {status.missions.map((m, i) => (
                 <option key={m.id} value={m.id}>
-                  Mission {i + 1} ({m.waypoints} waypoints now)
+                  Mission {i + 1} ({typeof m.waypoints === 'number' ? `${m.waypoints} waypoints now` : m.waypoints === 'none' ? 'no mission file found' : "can't read it"})
                 </option>
               ))}
             </select>

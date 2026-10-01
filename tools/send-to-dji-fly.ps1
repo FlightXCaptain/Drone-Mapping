@@ -109,8 +109,31 @@ $shell = New-Object -ComObject Shell.Application
 $script:tmp = Join-Path $env:TEMP "drone-mapping-$([guid]::NewGuid())"
 New-Item -ItemType Directory $script:tmp | Out-Null
 
+# A shell item's .Name is its DISPLAY name: with "Hide extensions for known file types" on
+# (the Windows default) or .kmz registered by e.g. Google Earth, "X.kmz" shows as "X". Match
+# files on their real filename instead, and accept the extension-less display name too.
+function Get-FileName($item) {
+  try { $n = [string]$item.ExtendedProperty('System.FileName'); if ($n) { return $n } } catch { }
+  return [string]$item.Name
+}
+function Test-ItemName($item, [string]$name) {
+  if ($item.IsFolder) { return $item.Name -ceq $name }
+  if ((Get-FileName $item) -ceq $name -or $item.Name -ceq $name) { return $true }
+  $ext = [IO.Path]::GetExtension($name)
+  return $ext -and $item.Name -ceq $name.Substring(0, $name.Length - $ext.Length)
+}
 function Get-Child($folder, [string]$name) {
-  return $folder.Items() | Where-Object { $_.Name -ceq $name } | Select-Object -First 1
+  return $folder.Items() | Where-Object { Test-ItemName $_ $name } | Select-Object -First 1
+}
+# Whatever single file lands in an empty folder - so we never have to predict its name.
+function Wait-LandedFile([string]$dir, [int]$timeoutSec = 90) {
+  $deadline = (Get-Date).AddSeconds($timeoutSec)
+  while ((Get-Date) -lt $deadline) {
+    $f = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($f) { return $f.FullName }
+    Start-Sleep -Milliseconds 200
+  }
+  return $null
 }
 # Shell copies run in the background: the file appears as soon as the copy STARTS. Reading it
 # then gets a half-written file on slower PCs/ports. Wait until it exists, Windows has released
@@ -137,11 +160,12 @@ function Copy-FromDevice($item, [string]$toDir) {
   New-Item -ItemType Directory -Force $toDir | Out-Null
   $started = Get-Date
   $shell.Namespace($toDir).CopyHere($item, 0x14)
-  $target = Join-Path $toDir $item.Name
-  if (-not (Wait-FileComplete $target)) {
-    throw "timed out reading $($item.Name) from the controller (try another USB port or cable)"
+  $label = Get-FileName $item
+  $target = Wait-LandedFile $toDir
+  if (-not $target -or -not (Wait-FileComplete $target)) {
+    throw "timed out reading $label from the controller (try another USB port or cable)"
   }
-  Log ("Read $($item.Name) ({0} bytes) in {1:n1} s" -f (Get-Item -LiteralPath $target).Length, ((Get-Date) - $started).TotalSeconds)
+  Log ("Read $label ({0} bytes) in {1:n1} s" -f (Get-Item -LiteralPath $target).Length, ((Get-Date) - $started).TotalSeconds)
   return $target
 }
 
@@ -272,8 +296,8 @@ function Remove-FromDevice() {
   $shell.Namespace($dir).MoveHere($item, 0x14)
   for ($i = 0; $i -lt 100 -and (Get-Child $targetDir $fileName); $i++) { Start-Sleep -Milliseconds 200 }
   if (Get-Child $targetDir $fileName) { throw "the old file couldn't be moved off the controller" }
-  $moved = Join-Path $dir $fileName
-  if (-not (Wait-FileComplete $moved)) { return $null }
+  $moved = Wait-LandedFile $dir
+  if (-not $moved -or -not (Wait-FileComplete $moved)) { return $null }
   return $moved
 }
 function Put-File([string]$source) {
