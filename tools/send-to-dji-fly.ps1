@@ -4,167 +4,244 @@
 
 .DESCRIPTION
   DJI Fly has no import button. The workaround is to replace the .kmz of a placeholder mission
-  in Android/data/dji.go.v5/files/waypoint/<UUID>/. This script does that over USB (MTP):
+  in Android/data/dji.go.v5/files/waypoint/<UUID>/. This script does that over USB (MTP).
 
-    1. Finds the controller (it must be switched ON and connected by a data USB cable).
-    2. Lists the DJI Fly missions on it with their waypoint counts so you can pick the placeholder.
-    3. Backs the placeholder up to Documents\Drone Mapping\backups.
-    4. Copies your KMZ in under the placeholder's UUID name.
-    5. Reads it back and checks it matches.
+  Safety rules (each enforced in code, not just by convention):
+    * Over MTP only the controller's shared storage is reachable - never system files or firmware.
+    * The ONLY file ever written is  Android/data/dji.go.v5/files/waypoint/<UUID>/<UUID>.kmz
+      Every folder on the way is matched by exact name; nothing else (image, map_preview,
+      capability, other missions) is ever written or deleted.
+    * The device must be an MTP device that has DJI Fly's waypoint folder on it.
+    * The new KMZ is validated first: a zip with exactly wpmz/template.kml + wpmz/waylines.wpml,
+      well-formed XML, DJI WPML namespace, 2-200 waypoints, under 10 MB.
+    * No backup, no change: the placeholder is copied to this PC and checked (it must open as a
+      mission) before anything is written.
+    * The file is overwritten in place (no delete step), then read back and compared by hash.
+      If it doesn't match, the backup is put back automatically.
+    * Every action is logged to Documents\Drone Mapping\send-log.txt.
 
-  Close DJI Fly on the controller first. If it's running it can keep showing (or re-save) the old mission.
-  The thumbnail in DJI Fly's mission list will still show the old route. That's expected; open the mission
-  to see the new one.
+  Close DJI Fly on the controller first. The mission's thumbnail in DJI Fly keeps showing the old
+  route; open the mission to see the new one.
 
 .PARAMETER Kmz
   The mission file to send. Defaults to the newest .kmz in your Downloads folder.
-
 .PARAMETER Mission
   The placeholder's UUID. If omitted you are asked to choose.
-
 .PARAMETER WhatIf
-  Show what would happen (and make the backup) without changing anything on the controller.
+  Validate, list and back up, but change nothing on the controller.
+.PARAMETER List
+  Only list the controller's DJI Fly missions.
+.PARAMETER Restore
+  Put a backup .kmz (from Documents\Drone Mapping\backups) back onto the controller. The mission
+  UUID is read from the backup's file name.
+.PARAMETER Json
+  For the Drone Mapping app: print one '##RESULT {json}' line and never prompt.
 
 .EXAMPLE
   .\send-to-dji-fly.ps1
   .\send-to-dji-fly.ps1 -Kmz "$HOME\Downloads\Smith_farm.kmz" -WhatIf
+  .\send-to-dji-fly.ps1 -Restore "$HOME\Documents\Drone Mapping\backups\<UUID>-20261001-114113.kmz"
 #>
 [CmdletBinding()]
 param(
   [string]$Kmz,
   [string]$Mission,
-  [switch]$WhatIf
+  [switch]$WhatIf,
+  [switch]$List,
+  [string]$Restore,
+  [switch]$Json
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-function Fail($msg) { Write-Host "`n$msg" -ForegroundColor Red; exit 1 }
+$UUID_RE = '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+$DJI_FLY_PATH = @('Android', 'data', 'dji.go.v5', 'files', 'waypoint')
+$dataDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Drone Mapping'
+$backupDir = Join-Path $dataDir 'backups'
+$logFile = Join-Path $dataDir 'send-log.txt'
+New-Item -ItemType Directory -Force $backupDir | Out-Null
 
-# ---- The mission file ----------------------------------------------------------------------
-if (-not $Kmz) {
-  $dl = Join-Path $HOME 'Downloads'
-  $latest = Get-ChildItem $dl -Filter *.kmz -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if (-not $latest) { Fail "No .kmz found in $dl. Download one from Send to drone first, or pass -Kmz <file>." }
+function Log($msg) { Add-Content -Path $logFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $msg" }
+function Result($obj) { if ($Json) { Write-Output ('##RESULT ' + ($obj | ConvertTo-Json -Compress -Depth 4)) } }
+function Say($msg) { if (-not $Json) { Write-Host $msg } }
+function Fail($msg) {
+  Log "FAILED: $msg"
+  if ($Json) { Result @{ ok = $false; error = $msg } } else { Write-Host "`n$msg" -ForegroundColor Red }
+  if ($script:tmp -and (Test-Path $script:tmp)) { Remove-Item -Recurse -Force $script:tmp }
+  exit 1
+}
+
+# ---- Validate a mission file: returns the waypoint count or throws a plain-language reason ------
+function Test-DjiFlyKmz([string]$path) {
+  $info = Get-Item $path
+  if ($info.Length -le 0 -or $info.Length -gt 10MB) { throw "file size $($info.Length) bytes is outside 1 B - 10 MB" }
+  try { $zip = [IO.Compression.ZipFile]::OpenRead($path) } catch { throw "it isn't a valid KMZ (zip) file" }
+  try {
+    $files = @($zip.Entries | Where-Object { -not $_.FullName.EndsWith('/') })
+    $names = ($files | ForEach-Object FullName | Sort-Object) -join '|'
+    if ($names -ne 'wpmz/template.kml|wpmz/waylines.wpml') {
+      throw "it should contain exactly wpmz/template.kml and wpmz/waylines.wpml, but has: $($names -replace '\|', ', ')"
+    }
+    $count = 0
+    foreach ($e in $files) {
+      $reader = New-Object IO.StreamReader($e.Open())
+      try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+      try { $null = [xml]$text } catch { throw "$($e.FullName) is not valid XML" }
+      if ($text -notmatch 'xmlns:wpml="http://www\.(uav|dji)\.com/wpmz/') { throw "$($e.FullName) is not a DJI WPML file" }
+      if ($e.FullName -eq 'wpmz/waylines.wpml') { $count = ([regex]::Matches($text, '<Placemark>')).Count }
+    }
+    if ($count -lt 1 -or $count -gt 200) { throw "it has $count waypoints; DJI Fly accepts up to 200" }
+    return $count
+  } finally { $zip.Dispose() }
+}
+
+# ---- Find the controller and DJI Fly's waypoint folder --------------------------------------
+$shell = New-Object -ComObject Shell.Application
+$script:tmp = Join-Path $env:TEMP "drone-mapping-$([guid]::NewGuid())"
+New-Item -ItemType Directory $script:tmp | Out-Null
+
+function Get-Child($folder, [string]$name) {
+  return $folder.Items() | Where-Object { $_.Name -ceq $name } | Select-Object -First 1
+}
+function Copy-FromDevice($item, [string]$toDir) {
+  New-Item -ItemType Directory -Force $toDir | Out-Null
+  $shell.Namespace($toDir).CopyHere($item, 0x14)
+  $target = Join-Path $toDir $item.Name
+  for ($i = 0; $i -lt 150 -and -not (Test-Path $target); $i++) { Start-Sleep -Milliseconds 200 }
+  Start-Sleep -Milliseconds 300
+  if (-not (Test-Path $target)) { throw "couldn't read $($item.Name) from the controller" }
+  return $target
+}
+
+# Only portable (MTP) devices that actually have DJI Fly's waypoint folder qualify.
+$device = $null; $waypointDir = $null
+foreach ($c in @($shell.Namespace(17).Items() | Where-Object { -not $_.IsFileSystem })) {
+  $storage = $c.GetFolder.Items() | Select-Object -First 1
+  if (-not $storage -or -not $storage.IsFolder) { continue }
+  $f = $storage.GetFolder
+  $found = $true
+  foreach ($seg in $DJI_FLY_PATH) {
+    $n = Get-Child $f $seg
+    if (-not $n -or -not $n.IsFolder) { $found = $false; break }
+    $f = $n.GetFolder
+  }
+  if ($found) { $device = $c; $waypointDir = $f; break }
+}
+if (-not $device) {
+  Fail "No controller with DJI Fly found. Switch the controller ON, connect it with a data USB cable, and save at least one waypoint mission in DJI Fly."
+}
+Say "Controller:   $($device.Name)"
+
+$missions = @($waypointDir.Items() | Where-Object { $_.IsFolder -and $_.Name -match $UUID_RE })
+
+# ---- Inventory (read-only) -------------------------------------------------------------------
+$rows = @()
+for ($i = 0; $i -lt $missions.Count; $i++) {
+  $m = $missions[$i]
+  $item = Get-Child $m.GetFolder "$($m.Name).kmz"
+  $count = 'none'
+  if ($item) { try { $count = Test-DjiFlyKmz (Copy-FromDevice $item (Join-Path $script:tmp "peek$i")) } catch { $count = 'unreadable' } }
+  $rows += [pscustomobject]@{ No = $i + 1; Mission = $m.Name; Waypoints = $count }
+}
+if ($List) {
+  Remove-Item -Recurse -Force $script:tmp
+  if ($Json) { Result @{ ok = $true; device = $device.Name; missions = @($rows | ForEach-Object { @{ id = $_.Mission; waypoints = $_.Waypoints } }) } }
+  else { Say "`nDJI Fly missions:"; $rows | Format-Table -AutoSize | Out-Host }
+  exit 0
+}
+if ($missions.Count -eq 0) { Fail "No DJI Fly missions on the controller. Save a short waypoint mission in DJI Fly to use as a placeholder." }
+
+# ---- What are we sending? (validated before the controller is touched) -----------------------
+if ($Restore) {
+  if (-not (Test-Path $Restore)) { Fail "Can't find backup $Restore" }
+  $Kmz = (Resolve-Path $Restore).Path
+  $Mission = ([IO.Path]::GetFileNameWithoutExtension($Kmz)) -replace '-\d{8}-\d{6}$', ''
+  if ($Mission -notmatch $UUID_RE) { Fail "Can't tell which mission $(Split-Path $Kmz -Leaf) belongs to (expected <UUID>-<date>-<time>.kmz)." }
+} elseif (-not $Kmz) {
+  $latest = Get-ChildItem (Join-Path $HOME 'Downloads') -Filter *.kmz -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if (-not $latest) { Fail "No .kmz in Downloads. Download one from Send to drone first, or pass -Kmz <file>." }
   $Kmz = $latest.FullName
 }
 if (-not (Test-Path $Kmz)) { Fail "Can't find $Kmz" }
 $Kmz = (Resolve-Path $Kmz).Path
+try { $newCount = Test-DjiFlyKmz $Kmz } catch { Fail "Refusing to send $(Split-Path $Kmz -Leaf): $($_.Exception.Message). Nothing was changed." }
+Say "Mission file: $Kmz ($newCount waypoints)"
 
-function Get-WaypointCount([string]$path) {
-  try {
-    $zip = [IO.Compression.ZipFile]::OpenRead($path)
-    try {
-      $entry = $zip.Entries | Where-Object FullName -eq 'wpmz/waylines.wpml' | Select-Object -First 1
-      if (-not $entry) { return $null }
-      $text = (New-Object IO.StreamReader($entry.Open())).ReadToEnd()
-      return ([regex]::Matches($text, '<Placemark>')).Count
-    } finally { $zip.Dispose() }
-  } catch { return $null }
-}
-
-$newCount = Get-WaypointCount $Kmz
-if (-not $newCount) { Fail "$Kmz doesn't look like a DJI waypoint mission (no wpmz/waylines.wpml)." }
-Write-Host "Mission file: $Kmz ($newCount waypoints)"
-
-# ---- Find the controller over MTP ------------------------------------------------------------
-$shell = New-Object -ComObject Shell.Application
-$device = $shell.Namespace(17).Items() | Where-Object { $_.Name -match 'DJI|RC' -and -not $_.IsFileSystem } | Select-Object -First 1
-if (-not $device) {
-  Fail "No DJI controller found. Switch the controller ON, connect it with a data USB cable, and wait for it to appear in File Explorer."
-}
-Write-Host "Controller:   $($device.Name)"
-
-$folder = ($device.GetFolder.Items() | Select-Object -First 1).GetFolder
-foreach ($seg in 'Android', 'data', 'dji.go.v5', 'files', 'waypoint') {
-  $next = $folder.Items() | Where-Object { $_.Name -eq $seg } | Select-Object -First 1
-  if (-not $next) { Fail "Couldn't find DJI Fly's waypoint folder ($seg missing). Create and save one waypoint mission in DJI Fly first." }
-  $folder = $next.GetFolder
-}
-$waypointDir = $folder
-
-$missions = @($waypointDir.Items() | Where-Object { $_.IsFolder -and $_.Name -match '^[0-9A-Fa-f-]{36}$' })
-if ($missions.Count -eq 0) { Fail "No DJI Fly missions on the controller. In DJI Fly, create and save a short waypoint mission to use as a placeholder." }
-
-# ---- Show what's there so the right placeholder gets replaced --------------------------------
-$tmp = Join-Path $env:TEMP "drone-mapping-$([guid]::NewGuid())"
-New-Item -ItemType Directory $tmp | Out-Null
-function Copy-FromDevice($item, [string]$toDir) {
-  $shell.Namespace($toDir).CopyHere($item, 0x14)
-  $target = Join-Path $toDir $item.Name
-  for ($i = 0; $i -lt 100 -and -not (Test-Path $target); $i++) { Start-Sleep -Milliseconds 200 }
-  Start-Sleep -Milliseconds 300
-  return $target
-}
-
-Write-Host "`nDJI Fly missions on the controller:"
-$rows = @()
-for ($i = 0; $i -lt $missions.Count; $i++) {
-  $m = $missions[$i]
-  $kmzItem = $m.GetFolder.Items() | Where-Object { $_.Name -eq "$($m.Name).kmz" } | Select-Object -First 1
-  $count = '?'
-  if ($kmzItem) {
-    $d = Join-Path $tmp "peek$i"; New-Item -ItemType Directory $d | Out-Null
-    $count = Get-WaypointCount (Copy-FromDevice $kmzItem $d)
-  }
-  $rows += [pscustomobject]@{ No = $i + 1; Mission = $m.Name; Waypoints = $count }
-}
-$rows | Format-Table -AutoSize | Out-Host
-
+# ---- Which placeholder? ------------------------------------------------------------------------
+if (-not $Json) { Say "`nDJI Fly missions on the controller:"; $rows | Format-Table -AutoSize | Out-Host }
 if ($Mission) {
-  $target = $missions | Where-Object { $_.Name -eq $Mission } | Select-Object -First 1
+  if ($Mission -notmatch $UUID_RE) { Fail "$Mission is not a DJI Fly mission id." }
+  $target = $missions | Where-Object { $_.Name -ieq $Mission } | Select-Object -First 1
   if (-not $target) { Fail "Mission $Mission isn't on the controller." }
 } elseif ($missions.Count -eq 1) {
   $target = $missions[0]
-  Write-Host "Only one mission, so that's the placeholder: $($target.Name)"
+  Say "Only one mission, so that's the placeholder: $($target.Name)"
+} elseif ($Json) {
+  Fail 'Choose which placeholder mission to replace.'
 } else {
   $pick = Read-Host "Which mission is the placeholder to replace? (1-$($missions.Count))"
   if (-not ($pick -as [int]) -or [int]$pick -lt 1 -or [int]$pick -gt $missions.Count) { Fail 'Cancelled.' }
   $target = $missions[[int]$pick - 1]
 }
 $uuid = $target.Name
+$fileName = "$uuid.kmz"
 $targetDir = $target.GetFolder
-$oldItem = $targetDir.Items() | Where-Object { $_.Name -eq "$uuid.kmz" } | Select-Object -First 1
+$oldItem = Get-Child $targetDir $fileName
+if (-not $oldItem) { Fail "Mission $uuid has no $fileName. Open and save it once in DJI Fly, then try again." }
 
-# ---- Back up the placeholder -----------------------------------------------------------------
-$backupDir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Drone Mapping\backups'
-New-Item -ItemType Directory -Force $backupDir | Out-Null
-if ($oldItem) {
-  $b = Join-Path $tmp 'backup'; New-Item -ItemType Directory $b | Out-Null
-  $copied = Copy-FromDevice $oldItem $b
-  $backup = Join-Path $backupDir "$uuid-$(Get-Date -Format yyyyMMdd-HHmmss).kmz"
-  Move-Item $copied $backup
-  Write-Host "Backed up the placeholder to $backup"
-}
+# ---- Backup: mandatory and verified -------------------------------------------------------------
+$stamp = Get-Date -Format yyyyMMdd-HHmmss
+try {
+  $copied = Copy-FromDevice $oldItem (Join-Path $script:tmp 'backup')
+  $backupCount = Test-DjiFlyKmz $copied
+} catch { Fail "Couldn't make a verified backup of the placeholder ($($_.Exception.Message)). Nothing was changed." }
+$backup = Join-Path $backupDir "$uuid-$stamp.kmz"
+Move-Item $copied $backup
+$backupHash = (Get-FileHash $backup).Hash
+Log "Backup: $($device.Name) mission $uuid ($backupCount waypoints) -> $backup [$backupHash]"
+Say "Backed up the placeholder ($backupCount waypoints) to $backup"
 
 if ($WhatIf) {
-  Write-Host "`n-WhatIf: would replace $uuid.kmz with $(Split-Path $Kmz -Leaf). Nothing on the controller was changed." -ForegroundColor Yellow
-  Remove-Item -Recurse -Force $tmp
+  Say "`n-WhatIf: would replace $fileName with $(Split-Path $Kmz -Leaf). Nothing on the controller was changed."
+  Log "WhatIf: would send $Kmz to $uuid"
+  Remove-Item -Recurse -Force $script:tmp
+  Result @{ ok = $true; whatIf = $true; mission = $uuid; waypoints = $newCount; backup = $backup }
   exit 0
 }
 
-# ---- Replace it ------------------------------------------------------------------------------
-$stage = Join-Path $tmp 'stage'; New-Item -ItemType Directory $stage | Out-Null
-$staged = Join-Path $stage "$uuid.kmz"
-Copy-Item $Kmz $staged
-# MTP can't overwrite in place reliably, so remove the old file first.
-if ($oldItem) {
-  $oldItem.InvokeVerbEx('delete')
-  for ($i = 0; $i -lt 50 -and ($targetDir.Items() | Where-Object { $_.Name -eq "$uuid.kmz" }); $i++) { Start-Sleep -Milliseconds 200 }
+# ---- Write: overwrite exactly that one file in place, then verify ------------------------------
+function Put-File([string]$source) {
+  # Stage under the exact target name and copy over the existing file (0x10 yes-to-all, 0x4 no UI).
+  $stageDir = Join-Path $script:tmp "stage-$([guid]::NewGuid())"
+  New-Item -ItemType Directory $stageDir | Out-Null
+  $staged = Join-Path $stageDir $fileName
+  Copy-Item $source $staged
+  $targetDir.CopyHere($staged, 0x14)
+  Start-Sleep -Seconds 2
 }
-$targetDir.CopyHere($staged, 0x14)
-for ($i = 0; $i -lt 100 -and -not ($targetDir.Items() | Where-Object { $_.Name -eq "$uuid.kmz" }); $i++) { Start-Sleep -Milliseconds 200 }
-Start-Sleep -Seconds 1
-
-# ---- Verify ----------------------------------------------------------------------------------
-$placed = $targetDir.Items() | Where-Object { $_.Name -eq "$uuid.kmz" } | Select-Object -First 1
-if (-not $placed) { Fail "The copy didn't arrive. Your placeholder backup is in $backupDir." }
-$v = Join-Path $tmp 'verify'; New-Item -ItemType Directory $v | Out-Null
-$back = Copy-FromDevice $placed $v
-if ((Get-FileHash $back).Hash -ne (Get-FileHash $Kmz).Hash) {
-  Fail "The file on the controller doesn't match what was sent. Try again; your placeholder backup is in $backupDir."
+function Get-DeviceHash() {
+  $item = Get-Child $targetDir $fileName
+  if (-not $item) { return $null }
+  try { return (Get-FileHash (Copy-FromDevice $item (Join-Path $script:tmp "verify-$([guid]::NewGuid())"))).Hash } catch { return $null }
 }
-Remove-Item -Recurse -Force $tmp
 
-Write-Host "`nDone. Mission $uuid now holds $newCount waypoints." -ForegroundColor Green
-Write-Host "Unplug, open DJI Fly, and open that mission (its thumbnail still shows the old route until you do)."
-Write-Host "Check the route, heights and lost-signal action before take-off."
+$wantHash = (Get-FileHash $Kmz).Hash
+Log "Send: $Kmz [$wantHash] -> $($device.Name) $uuid"
+Put-File $Kmz
+$gotHash = Get-DeviceHash
+
+if ($gotHash -ne $wantHash) {
+  Log "Verify failed (got $gotHash). Restoring backup."
+  Put-File $backup
+  $restored = (Get-DeviceHash) -eq $backupHash
+  Log $(if ($restored) { 'Backup restored.' } else { "RESTORE FAILED - backup kept at $backup" })
+  if ($restored) { Fail "The mission didn't copy correctly, so the original was put back. Nothing changed. Try again." }
+  Fail "The mission didn't copy correctly and the original couldn't be put back automatically. Run: .\send-to-dji-fly.ps1 -Restore `"$backup`""
+}
+
+Remove-Item -Recurse -Force $script:tmp
+Log "OK: $uuid now holds $newCount waypoints"
+Say "`nDone. Mission $uuid now holds $newCount waypoints."
+Say "Unplug, open DJI Fly, and open that mission (its thumbnail still shows the old route until you do)."
+Say "Check the route, heights and lost-signal action before take-off."
+Result @{ ok = $true; mission = $uuid; waypoints = $newCount; backup = $backup; restored = [bool]$Restore }
