@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { area as turfArea, polygon as turfPolygon } from '@turf/turf'
 import { MapView, type Basemap } from './components/MapView'
 import { ControlCard } from './components/ControlCard'
 import { Toolbar } from './components/Toolbar'
@@ -8,10 +7,8 @@ import { SendDialog } from './components/SendDialog'
 import { DroneEditor } from './components/DroneEditor'
 import { PlaceSearch } from './components/PlaceSearch'
 import { SharedPlanPrompt } from './components/SharedPlanPrompt'
-import { useCurrentDrone, usePlanner } from './store'
-import { planGrid } from './domain/planners/grid'
-import { planOrbit, ringRadius } from './domain/planners/orbit'
-import { missionStats } from './domain/stats'
+import { currentParts, useCurrentDrone, usePlanner } from './store'
+import { planAll } from './plan'
 import type { LngLat } from './domain/types'
 import './App.css'
 
@@ -21,27 +18,21 @@ export default function App() {
   const [basemap, setBasemap] = useState<Basemap>('satellite')
   const [flyTo, setFlyTo] = useState<LngLat | null>(null)
 
-  // Re-plan on every edit. Planning is pure and takes a few ms, which is what lets
+  // Re-plan every part on every edit. Planning is pure and takes a few ms, which is what lets
   // dragging a corner or the route feel live.
-  const { mission, stats } = useMemo(() => {
-    if (s.missionType === 'grid' && s.area && s.area.length >= 4) {
-      const m = planGrid(s.area, drone, s.grid, s.missionName)
-      return { mission: m, stats: missionStats(m, drone, turfArea(turfPolygon([s.area]))) }
-    }
-    if (s.missionType === 'orbit' && s.orbitCenter) {
-      const m = planOrbit(s.orbitCenter, drone, s.orbit, s.missionName)
-      // GSD at the average slant range from each ring to the subject's mid-height.
-      const slant =
-        s.orbit.rings.reduce((sum, r) => sum + Math.hypot(ringRadius(r, s.orbit), r.altitudeM - s.subjectHeightM / 2), 0) /
-        Math.max(1, s.orbit.rings.length)
-      return { mission: m, stats: missionStats(m, drone, null, slant) }
-    }
-    return { mission: null, stats: null }
-  }, [s.missionType, s.area, s.orbitCenter, s.grid, s.orbit, s.subjectHeightM, s.missionName, drone])
+  const parts = useMemo(
+    () => currentParts(s),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [s.parts, s.activePartId, s.missionType, s.area, s.orbitCenter, s.grid, s.orbit, s.subjectHeightM, s.ringCount],
+  )
+  const { mission, stats, active } = useMemo(
+    () => planAll(parts, s.activePartId, drone, s.missionName),
+    [parts, s.activePartId, drone, s.missionName],
+  )
 
   return (
     <div className="app">
-      <MapView mission={mission} basemap={basemap} flyTo={flyTo} />
+      <MapView mission={mission} activeMission={active?.mission ?? null} parts={parts} basemap={basemap} flyTo={flyTo} />
 
       <div className="top-left">
         <PlaceSearch onPick={(c) => setFlyTo([...c])} />

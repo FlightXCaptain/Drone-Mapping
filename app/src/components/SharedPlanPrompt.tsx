@@ -4,6 +4,15 @@ import { usePlanner } from '../store'
 import type { LngLat } from '../domain/types'
 import { Dialog } from './Dialog'
 
+function describe(plan: SharedPlan): string {
+  const n = (t: 'grid' | 'orbit') => plan.parts.filter((p) => p.type === t).length
+  const bits = [
+    n('grid') && `${n('grid')} area map${n('grid') > 1 ? 's' : ''}`,
+    n('orbit') && `${n('orbit')} orbit${n('orbit') > 1 ? 's' : ''}`,
+  ].filter(Boolean)
+  return bits.join(' and ')
+}
+
 /** When the app is opened from a mission link or QR code, offer to load that mission. */
 export function SharedPlanPrompt({ onOpened }: { onOpened: (focus: LngLat | null) => void }) {
   const [plan, setPlan] = useState<SharedPlan | null>(null)
@@ -47,7 +56,7 @@ export function SharedPlanPrompt({ onOpened }: { onOpened: (focus: LngLat | null
   return (
     <Dialog title="Open shared mission" onClose={dismiss}>
       <p className="dialog-lede">
-        <strong>{plan.name}</strong>, {plan.type === 'grid' ? 'an area mapping flight' : 'an orbit'}.
+        <strong>{plan.name}</strong>: {describe(plan)}.
         {hasPlan && ' It replaces the mission currently on this device.'}
       </p>
       <div className="dialog-actions">
@@ -61,7 +70,8 @@ export function SharedPlanPrompt({ onOpened }: { onOpened: (focus: LngLat | null
             const s = usePlanner.getState()
             s.loadPlan(plan)
             dismiss()
-            onOpened(plan.type === 'grid' ? (plan.area?.[0] ?? null) : (plan.center ?? null))
+            const first = plan.parts[0]
+            onOpened(first.type === 'grid' ? (first.area?.[0] ?? null) : (first.center ?? null))
             // The point of a hand-off is getting it onto the drone, so go straight there.
             s.setSendOpen(true)
           }}

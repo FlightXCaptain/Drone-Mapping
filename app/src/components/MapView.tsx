@@ -7,7 +7,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawRectangleMode } from 'terra-draw'
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
-import { usePlanner } from '../store'
+import { partLabel, usePlanner, type Part } from '../store'
 import { bearingDeg, centroid, distanceM, localFrame } from '../domain/geo'
 import type { LngLat, Mission } from '../domain/types'
 
@@ -92,7 +92,17 @@ function el(className: string, title: string, html = ''): HTMLDivElement {
 const openRing = (ring: LngLat[]) => ring.slice(0, -1)
 const closeRing = (pts: LngLat[]) => [...pts, pts[0]]
 
-export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; basemap: Basemap; flyTo: LngLat | null }) {
+interface MapViewProps {
+  /** Whole mission, all parts joined. */
+  mission: Mission | null
+  /** The part being edited, on its own. */
+  activeMission: Mission | null
+  parts: Part[]
+  basemap: Basemap
+  flyTo: LngLat | null
+}
+
+export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapViewProps) {
   const container = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const drawRef = useRef<TerraDraw | null>(null)
@@ -110,6 +120,8 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
   const vertexMarkers = useRef<maplibregl.Marker[]>([])
   const midMarkers = useRef<maplibregl.Marker[]>([])
   const fixed = useRef<Record<string, maplibregl.Marker>>({})
+  const chips = useRef<maplibregl.Marker[]>([])
+  const activePartId = usePlanner((s) => s.activePartId)
   const onMap = useRef(new Set<string>())
   const startDragging = useRef(false)
 
@@ -133,9 +145,12 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right')
 
     map.on('load', () => {
-      for (const id of ['area', 'orbit-disc', 'orbit-ring', 'mission-path', 'mission-photos']) {
+      for (const id of ['others', 'area', 'orbit-disc', 'orbit-ring', 'mission-path', 'active-path', 'mission-photos']) {
         map.addSource(id, { type: 'geojson', data: EMPTY })
       }
+      // Other parts of the mission: faint, and not draggable (tap their number chip to edit).
+      map.addLayer({ id: 'others-fill', type: 'fill', source: 'others', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#fff', 'fill-opacity': 0.06 } })
+      map.addLayer({ id: 'others-line', type: 'line', source: 'others', paint: { 'line-color': '#fff', 'line-width': 1.5, 'line-opacity': 0.7, 'line-dasharray': [1, 2] } })
       map.addLayer({ id: 'area-fill', type: 'fill', source: 'area', paint: { 'fill-color': '#fff', 'fill-opacity': 0.14 } })
       map.addLayer({ id: 'area-line', type: 'line', source: 'area', paint: { 'line-color': '#fff', 'line-width': 2, 'line-dasharray': [2, 1.5] } })
       map.addLayer({ id: 'orbit-disc', type: 'fill', source: 'orbit-disc', paint: { 'fill-color': '#fff', 'fill-opacity': 0.12 } })
@@ -154,7 +169,7 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
         },
       })
       // Invisible, finger-wide hit areas over thin lines.
-      map.addLayer({ id: 'path-hit', type: 'line', source: 'mission-path', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
+      map.addLayer({ id: 'path-hit', type: 'line', source: 'active-path', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
       map.addLayer({ id: 'ring-hit', type: 'line', source: 'orbit-ring', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 28 } })
 
       // Terra Draw only sketches new areas; once finished, the shape is handed to the store.
@@ -286,7 +301,41 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
     const has = mission && mission.waypoints.length > 0
     set('mission-path', has ? fc([feat({ type: 'LineString', coordinates: mission.waypoints.map((w) => w.position) })]) : EMPTY)
     set('mission-photos', has ? fc(mission.photoPoints.map((p) => feat({ type: 'Point', coordinates: p }))) : EMPTY)
-  }, [ready, missionType, area, orbitCenter, radiusM, rings, mission])
+    const act = activeMission && activeMission.waypoints.length > 0
+    set('active-path', act ? fc([feat({ type: 'LineString', coordinates: activeMission.waypoints.map((w) => w.position) })]) : EMPTY)
+    const others: GeoJSON.Feature[] = []
+    for (const p of parts) {
+      if (p.id === activePartId) continue
+      if (p.missionType === 'grid' && p.area) others.push(feat({ type: 'Polygon', coordinates: [p.area] }))
+      if (p.missionType === 'orbit' && p.orbitCenter) {
+        for (const r of new Set(p.orbit.rings.map((x) => x.radiusM ?? p.orbit.radiusM))) {
+          others.push(feat({ type: 'LineString', coordinates: circle(p.orbitCenter, r) }))
+        }
+      }
+    }
+    set('others', fc(others))
+  }, [ready, missionType, area, orbitCenter, radiusM, rings, mission, activeMission, parts, activePartId])
+
+  // ---- Part number chips: show flight order, tap to edit that part ----------------------------
+  useEffect(() => {
+    if (!ready) return
+    const map = mapRef.current!
+    chips.current.forEach((m) => m.remove())
+    chips.current = []
+    if (parts.length < 2) return
+    parts.forEach((p, i) => {
+      const at = p.missionType === 'grid' ? (p.area ? centroid(p.area) : null) : p.orbitCenter
+      if (!at) return
+      const active = p.id === activePartId
+      const chip = el(`part-chip${active ? ' active' : ''}`, active ? `Editing part ${i + 1}` : `Edit part ${i + 1}: ${partLabel(p)}`, String(i + 1))
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation()
+        usePlanner.getState().selectPart(p.id)
+      })
+      // Offset so it doesn't cover the orbit centre handle or the middle of an area.
+      chips.current.push(new maplibregl.Marker({ element: chip, offset: [0, -34] }).setLngLat(at).addTo(map))
+    })
+  }, [ready, parts, activePartId])
 
   // ---- Corner and midpoint handles (rebuilt only when the corner count changes) --------------
   const cornerCount = missionType === 'grid' && area ? area.length - 1 : 0
@@ -432,12 +481,15 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
         onMap.current.add(key)
       }
     }
-    const wps = mission?.waypoints ?? []
-    const first = wps[0]?.position ?? null
-    const last = wps.at(-1)?.position ?? null
+    const first = activeMission?.waypoints[0]?.position ?? null
+    const last = mission?.waypoints.at(-1)?.position ?? null
+    const idx = parts.findIndex((p) => p.id === activePartId)
+    const label = f.start.getElement().querySelector('.pin-label')
+    if (label) label.textContent = idx > 0 ? `Part ${idx + 1} start` : 'Start'
     snapStart.current = () => place('start', first)
     if (!startDragging.current) place('start', first)
-    place('end', missionType === 'grid' ? last : null) // an orbit ends next to its start
+    const lastPartIsOrbit = parts.at(-1)?.missionType === 'orbit'
+    place('end', lastPartIsOrbit ? null : last) // an orbit ends next to its own start
 
     if (missionType === 'grid' && area) {
       const c = centroid(area)
@@ -449,7 +501,7 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
     updateCompact.current()
     const outer = Math.max(...rings.map((r) => r.radiusM ?? radiusM))
     place('edge', missionType === 'orbit' && orbitCenter ? offset(orbitCenter, 90, outer) : null)
-  }, [ready, mission, missionType, area, angleDeg, orbitCenter, radiusM, rings])
+  }, [ready, mission, activeMission, parts, activePartId, missionType, area, angleDeg, orbitCenter, radiusM, rings])
 
   // ---- Basemap & fly-to ------------------------------------------------------------------------
   useEffect(() => {
