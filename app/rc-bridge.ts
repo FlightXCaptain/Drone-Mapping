@@ -65,7 +65,13 @@ const json = (res: ServerResponse, status: number, body: unknown) => {
   res.end(JSON.stringify(body))
 }
 
-let busy = false
+// The controller can only do one thing at a time, so requests queue rather than fail.
+let queue: Promise<unknown> = Promise.resolve()
+function serialised<T>(work: () => Promise<T>): Promise<T> {
+  const run = queue.then(work, work)
+  queue = run.catch(() => {})
+  return run
+}
 
 const handler: Connect.NextHandleFunction = async (req, res, next) => {
   if (!req.url?.startsWith('/api/rc')) return next()
@@ -93,8 +99,10 @@ const handler: Connect.NextHandleFunction = async (req, res, next) => {
   }
   if (req.headers['x-drone-mapping'] !== '1') return json(res, 403, { ok: false, error: 'Request not from this app.' })
   if (process.platform !== 'win32') return json(res, 501, { ok: false, error: 'The controller bridge needs Windows.' })
-  if (busy) return json(res, 409, { ok: false, error: 'Already talking to the controller. Try again in a moment.' })
-  busy = true
+  await serialised(() => handle(req, res))
+}
+
+async function handle(req: IncomingMessage, res: ServerResponse) {
   try {
     if (req.method === 'GET' && req.url === '/api/rc') {
       return json(res, 200, await runScript(['-List']))
@@ -114,8 +122,6 @@ const handler: Connect.NextHandleFunction = async (req, res, next) => {
     json(res, 404, { ok: false, error: 'Unknown controller request.' })
   } catch (e) {
     json(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) })
-  } finally {
-    busy = false
   }
 }
 
