@@ -46,6 +46,14 @@ describe('WPML export', () => {
     expect(xml.match(/gimbalRotate</g)?.length).toBe(m.waypoints.length)
   })
 
+  it('DJI Fly template.kml is a stub: the route lives only in waylines.wpml', () => {
+    const t = buildTemplateKml(grid, mini4, 'djifly')
+    expect(parse(t).getElementsByTagName('parsererror').length).toBe(0)
+    expect(t).not.toContain('<Placemark>')
+    expect(t).not.toContain('<Folder>')
+    expect(t).toContain('<wpml:author>fly</wpml:author>')
+  })
+
   it('orbit waypoints face the subject', () => {
     const c: LngLat = [115.85, -31.95]
     const m = planOrbit(c, m3e, { ...defaultOrbitParams, rings: [{ altitudeM: 20, gimbalPitchDeg: -20 }], photosPerRing: 4 })
@@ -57,8 +65,7 @@ describe('WPML export', () => {
   it('KMZ contains both wpmz files', async () => {
     const blob = await buildKmz(grid, m3e, 'pilot2')
     const zip = await JSZip.loadAsync(await blob.arrayBuffer())
-    expect(zip.file('wpmz/template.kml')).not.toBeNull()
-    expect(zip.file('wpmz/waylines.wpml')).not.toBeNull()
+    expect(Object.keys(zip.files).sort()).toEqual(['wpmz/template.kml', 'wpmz/waylines.wpml'])
   })
 
   it('refuses drones without WPML IDs', () => {

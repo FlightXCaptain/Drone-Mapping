@@ -24,3 +24,15 @@ npm run build
 
 > ⚠ Always check an imported mission in the flight app before flying: altitude, RC-lost
 > behaviour, obstacles and local airspace rules. You are responsible for every flight.
+
+## Loading missions into DJI Fly (RC 2 / RC / Android phone)
+
+DJI Fly has no import, so a mission replaces a placeholder. With the controller **switched on**,
+connected by USB, and **DJI Fly closed**:
+
+```powershell
+.\tools\send-to-dji-fly.ps1            # newest .kmz in Downloads → pick the placeholder
+.\tools\send-to-dji-fly.ps1 -WhatIf    # dry run: lists missions and backs up, changes nothing
+```
+
+The placeholder's thumbnail in DJI Fly keeps showing the old route; open the mission to see the new one.
