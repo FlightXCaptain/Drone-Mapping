@@ -1,3 +1,4 @@
+import { uid } from '../util'
 import { useState } from 'react'
 import { usePlanner } from '../store'
 import type { DroneProfile, ExportTarget } from '../domain/types'
@@ -31,7 +32,7 @@ type NumPath =
 export function DroneEditor({ initial }: { initial: DroneProfile | null }) {
   const { saveCustomDrone, deleteCustomDrone, setDroneEditor } = usePlanner.getState()
   const close = () => setDroneEditor(null)
-  const [d, setD] = useState<DroneProfile>(initial ?? { ...BLANK, id: crypto.randomUUID() })
+  const [d, setD] = useState<DroneProfile>(initial ?? { ...BLANK, id: uid() })
   const existing = usePlanner((s) => s.customDrones.some((x) => x.id === d.id))
 
   const get = (p: NumPath) => (p.startsWith('camera.') ? d.camera[p.slice(7) as keyof DroneProfile['camera']] : d[p as keyof DroneProfile]) as number
