@@ -180,10 +180,7 @@ export function Sidebar({ mission, stats, drone }: { mission: Mission | null; st
           ['rectangle', '▭ Rectangle'],
           ['select', '✥ Edit'],
         ] as const)
-      : ([
-          ['point', '◎ Place subject'],
-          ['select', '✥ Move'],
-        ] as const)
+      : ([['point', s.orbitCenter ? '◎ Re-place subject' : '◎ Place subject']] as const)
 
   return (
     <aside className="sidebar">
@@ -233,6 +230,11 @@ export function Sidebar({ mission, stats, drone }: { mission: Mission | null; st
           </button>
         </div>
         {s.drawTool === 'polygon' && <small className="hint">Tap to add corners. Tap the first point (or double-tap) to finish.</small>}
+        {s.drawTool === 'point' && <small className="hint">Tap the map on the subject you want to orbit.</small>}
+        {s.drawTool === 'select' && <small className="hint">Drag corners to reshape, drag the + midpoints to add corners, or drag inside to move the whole area.</small>}
+        {s.missionType === 'orbit' && s.orbitCenter && !s.drawTool && (
+          <small className="hint">Drag the yellow centre to move the orbit. Drag the green handle to change its radius.</small>
+        )}
       </section>
 
       <section>

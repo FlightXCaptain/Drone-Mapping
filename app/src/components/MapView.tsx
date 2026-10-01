@@ -7,7 +7,6 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   TerraDraw,
-  TerraDrawPointMode,
   TerraDrawPolygonMode,
   TerraDrawRectangleMode,
   TerraDrawSelectMode,
@@ -15,6 +14,7 @@ import {
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import { usePlanner } from '../store'
 import type { LngLat, Mission } from '../domain/types'
+import { localFrame } from '../domain/geo'
 import { PlaceSearch } from './PlaceSearch'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
@@ -52,6 +52,13 @@ const STYLE: StyleSpecification = {
     { id: 'labels', type: 'raster', source: 'labels' },
     { id: 'streets', type: 'raster', source: 'streets', layout: { visibility: 'none' } },
   ],
+}
+
+function handleEl(className: string, title: string) {
+  const el = document.createElement('div')
+  el.className = `map-handle ${className}`
+  el.title = title
+  return el
 }
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -92,6 +99,11 @@ export function MapView({ mission }: { mission: Mission | null }) {
   const drawTool = usePlanner((s) => s.drawTool)
   const area = usePlanner((s) => s.area)
   const orbitCenter = usePlanner((s) => s.orbitCenter)
+  const radiusM = usePlanner((s) => s.orbit.radiusM)
+  const missionType = usePlanner((s) => s.missionType)
+  const orbitHandles = useRef<{ centre: maplibregl.Marker; edge: maplibregl.Marker } | null>(null)
+  const handlesOnMap = useRef(false)
+  const edgeBearing = useRef(0) // radians from east; remembers where the user left the resize handle
 
   // ---- Map + Terra Draw lifecycle -------------------------------------------------------
   useEffect(() => {
@@ -156,13 +168,11 @@ export function MapView({ mission }: { mission: Mission | null }) {
         modes: [
           new TerraDrawPolygonMode(),
           new TerraDrawRectangleMode(),
-          new TerraDrawPointMode(),
           new TerraDrawSelectMode({
             flags: {
               polygon: {
                 feature: { draggable: true, coordinates: { midpoints: true, draggable: true, deletable: true } },
               },
-              point: { feature: { draggable: true } },
             },
           }),
         ],
@@ -180,46 +190,33 @@ export function MapView({ mission }: { mission: Mission | null }) {
           },
         ])
       }
-      if (initialCenter) {
-        draw.addFeatures([
-          {
-            id: crypto.randomUUID(),
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: initialCenter },
-            properties: { mode: 'point' },
-          },
-        ])
-      }
 
-      // Terra Draw is the source of truth while editing; push its geometry into the store.
+      // Terra Draw is the source of truth while editing an area; push its geometry into the store.
       const sync = (keepId?: string | number) => {
-        const features = draw.getSnapshot()
-        const polys = features.filter((f) => f.geometry.type === 'Polygon')
-        const points = features.filter((f) => f.geometry.type === 'Point' && f.properties.mode === 'point')
-        // Only one area and one orbit centre at a time – a newly finished shape replaces the old.
-        for (const group of [polys, points]) {
-          if (group.length > 1 && keepId !== undefined) {
-            draw.removeFeatures(group.filter((f) => f.id !== keepId).map((f) => f.id!))
-          }
+        const polys = draw.getSnapshot().filter((f) => f.geometry.type === 'Polygon')
+        // Only one area at a time – a newly finished shape replaces the old one.
+        if (polys.length > 1 && keepId !== undefined) {
+          draw.removeFeatures(polys.filter((f) => f.id !== keepId).map((f) => f.id!))
         }
         const poly = draw.getSnapshot().find((f) => f.geometry.type === 'Polygon')
-        const point = draw.getSnapshot().find((f) => f.geometry.type === 'Point' && f.properties.mode === 'point')
-        const s = usePlanner.getState()
-        s.setArea(poly ? ((poly.geometry as GeoJSON.Polygon).coordinates[0] as LngLat[]) : null)
-        s.setOrbitCenter(point ? ((point.geometry as GeoJSON.Point).coordinates as LngLat) : null)
+        usePlanner.getState().setArea(poly ? ((poly.geometry as GeoJSON.Polygon).coordinates[0] as LngLat[]) : null)
       }
 
       draw.on('finish', (id, ctx) => {
         sync(id)
-        if (ctx.action === 'draw') {
-          // Straight into edit mode so vertices can be nudged immediately.
-          usePlanner.getState().setDrawTool('select')
-          draw.setMode('select')
-          draw.selectFeature(id)
-        }
+        // Straight into edit mode (the tool effect selects the shape) so corners can be nudged immediately.
+        if (ctx.action === 'draw') usePlanner.getState().setDrawTool('select')
       })
       draw.on('change', (_ids, type) => {
         if (type === 'update' || type === 'delete') sync()
+      })
+
+      // Orbit subject placement is a plain map tap – no Terra Draw involvement.
+      map.on('click', (e) => {
+        const s = usePlanner.getState()
+        if (s.drawTool !== 'point') return
+        s.setOrbitCenter([e.lngLat.lng, e.lngLat.lat])
+        s.setDrawTool(null)
       })
 
       setReady(true)
@@ -234,21 +231,72 @@ export function MapView({ mission }: { mission: Mission | null }) {
   // ---- Tool selection --------------------------------------------------------------------
   useEffect(() => {
     if (!ready) return
-    drawRef.current!.setMode(drawTool ?? 'static')
+    const draw = drawRef.current!
+    const mode = drawTool === 'point' || drawTool === null ? 'static' : drawTool
+    // Re-setting the current mode would reset it and drop the selection, so only switch on change.
+    if (draw.getMode() !== mode) draw.setMode(mode)
+    if (mode === 'select') {
+      // Pre-select the area so its corners are draggable with no extra tap.
+      const poly = draw.getSnapshot().find((f) => f.geometry.type === 'Polygon')
+      if (poly) draw.selectFeature(poly.id!)
+    }
+    mapRef.current!.getCanvas().style.cursor = drawTool === 'point' ? 'crosshair' : ''
   }, [drawTool, ready])
 
-  // ---- External clears (Clear button) remove shapes from the drawing ---------------------
+  // ---- External clears (Clear button) remove the area from the drawing ------------------
+  useEffect(() => {
+    if (!ready || area !== null) return
+    const draw = drawRef.current!
+    const stale = draw.getSnapshot().filter((f) => f.geometry.type === 'Polygon')
+    if (stale.length) draw.removeFeatures(stale.map((f) => f.id!))
+  }, [area, ready])
+
+  // ---- Orbit handles: drag the centre to move, drag the edge handle to resize -------------
   useEffect(() => {
     if (!ready) return
-    const draw = drawRef.current!
-    const snap = draw.getSnapshot()
-    const stale = snap.filter(
-      (f) =>
-        (area === null && f.geometry.type === 'Polygon') ||
-        (orbitCenter === null && f.geometry.type === 'Point' && f.properties.mode === 'point'),
-    )
-    if (stale.length) draw.removeFeatures(stale.map((f) => f.id!))
-  }, [area, orbitCenter, ready])
+    const centre = new maplibregl.Marker({ element: handleEl('orbit-centre', 'Drag to move orbit'), draggable: true })
+    const edge = new maplibregl.Marker({ element: handleEl('orbit-edge', 'Drag to resize orbit'), draggable: true })
+    orbitHandles.current = { centre, edge }
+
+    centre.on('drag', () => {
+      const p = centre.getLngLat()
+      usePlanner.getState().setOrbitCenter([p.lng, p.lat])
+    })
+    edge.on('drag', () => {
+      const s = usePlanner.getState()
+      if (!s.orbitCenter) return
+      const p = edge.getLngLat()
+      const [x, y] = localFrame(s.orbitCenter).toXY([p.lng, p.lat])
+      edgeBearing.current = Math.atan2(y, x)
+      s.updateOrbit({ radiusM: Math.max(5, Math.min(500, Math.round(Math.hypot(x, y)))) })
+    })
+    return () => {
+      centre.remove()
+      edge.remove()
+      handlesOnMap.current = false
+    }
+  }, [ready])
+
+  useEffect(() => {
+    const h = orbitHandles.current
+    if (!ready || !h) return
+    const map = mapRef.current!
+    if (missionType !== 'orbit' || !orbitCenter) {
+      h.centre.remove()
+      h.edge.remove()
+      handlesOnMap.current = false
+      return
+    }
+    const a = edgeBearing.current
+    h.centre.setLngLat(orbitCenter)
+    h.edge.setLngLat(localFrame(orbitCenter).toLngLat([Math.cos(a) * radiusM, Math.sin(a) * radiusM]))
+    // addTo() removes and re-adds the marker, which would cancel a drag in progress – add once only.
+    if (!handlesOnMap.current) {
+      h.centre.addTo(map)
+      h.edge.addTo(map)
+      handlesOnMap.current = true
+    }
+  }, [orbitCenter, radiusM, missionType, ready])
 
   // ---- Mission overlay --------------------------------------------------------------------
   useEffect(() => {
