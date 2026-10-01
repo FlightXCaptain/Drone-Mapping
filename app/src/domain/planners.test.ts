@@ -98,3 +98,13 @@ describe('route start', () => {
     expect(m.waypoints[0].position[1]).toBeCloseTo(c[1], 5)
   })
 })
+
+describe('batteries', () => {
+  it('plans to land every battery at 20%', async () => {
+    const { estimateBatteries } = await import('./stats')
+    const d = { ...drone, flightTimeMin: 30 } // 24 min usable per battery
+    expect(estimateBatteries(24 * 60, d)).toBe(1)
+    expect(estimateBatteries(24 * 60 + 1, d)).toBe(2)
+    expect(estimateBatteries(10, d)).toBe(1)
+  })
+})

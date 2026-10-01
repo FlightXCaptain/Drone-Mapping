@@ -25,7 +25,7 @@ export function StatsBar({ stats }: { stats: MissionStats | null }) {
       <dl>
         {items.map(([k, v]) => (
           <div key={k}>
-            <dt>{k}</dt>
+            <dt title={k === "Batteries" ? "Each battery lands with 20% left" : undefined}>{k}</dt>
             <dd>{v}</dd>
           </div>
         ))}
