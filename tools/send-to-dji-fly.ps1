@@ -20,7 +20,8 @@
       If it doesn't match, the backup is put back automatically.
     * Every action is logged to Documents\Drone Mapping\send-log.txt.
 
-  Close DJI Fly on the controller first. The mission's thumbnail in DJI Fly keeps showing the old
+  Restart the controller before (and after) sending so DJI Fly is fully closed: it caches missions
+  and writes its old copy back over the file if it is still running. The thumbnail keeps showing the old
   route; open the mission to see the new one.
 
 .PARAMETER Kmz

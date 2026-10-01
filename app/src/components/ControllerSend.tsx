@@ -31,6 +31,8 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   const [slot, setSlot] = useState<string>('')
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  // What we last put on the controller, to notice if DJI Fly writes its cached copy back over it.
+  const [sent, setSent] = useState<{ mission: string; waypoints: number } | null>(null)
 
   const check = useCallback(async () => {
     setStatus({ kind: 'checking' })
@@ -65,10 +67,10 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
       const body = await res.json()
       setResult(
         body.ok
-          ? { ok: true, text: `Sent: ${body.waypoints} waypoints are now in that mission. The old version is backed up on this PC.` }
+          ? { ok: true, text: `Sent and verified: ${body.waypoints} waypoints are now in that mission. The old version is backed up on this PC.` }
           : { ok: false, text: body.error },
       )
-      if (body.ok) check()
+      if (body.ok) setSent({ mission: body.mission, waypoints: body.waypoints })
     } catch (e) {
       setResult({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -77,6 +79,9 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   }
 
   if (status.kind === 'unavailable') return null
+
+  const now = status.kind === 'ready' && sent ? status.missions.find((m) => m.id === sent.mission) : undefined
+  const overwritten = !!now && Number(now.waypoints) !== sent!.waypoints
 
   return (
     <section className="controller">
@@ -113,7 +118,21 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
         </>
       )}
       {result && <p className={result.ok ? 'success' : 'error'}>{result.text}</p>}
-      {result?.ok && <p className="fine">Open DJI Fly and open that mission. Its thumbnail keeps showing the old route; that's normal.</p>}
+      {result?.ok && !overwritten && (
+        <ol className="fine steps-inline">
+          <li>Unplug and <strong>restart the controller</strong> (hold the power button, then Restart). DJI Fly keeps missions cached and can write its old copy back if it was still running.</li>
+          <li>Open DJI Fly and open the mission. Its thumbnail still shows the old route; that's normal.</li>
+          <li>
+            Before take-off, <button className="text-btn" onClick={check}>check the controller</button> still holds {sent?.waypoints} waypoints.
+          </li>
+        </ol>
+      )}
+      {overwritten && (
+        <p className="error">
+          DJI Fly has replaced the mission with its cached copy ({now!.waypoints} waypoints). Restart the controller so DJI Fly is fully closed,
+          plug it back in, and send again.
+        </p>
+      )}
     </section>
   )
 }
