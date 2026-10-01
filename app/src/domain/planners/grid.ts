@@ -21,6 +21,8 @@ export interface GridParams {
   /** Extend each line past the polygon so the aircraft is at speed and level before shooting. */
   overshootM: number
   triggerMode: TriggerMode
+  /** Begin the route at whichever valid entry corner is closest to this point (e.g. take-off spot). */
+  startNear: LngLat | null
 }
 
 export const defaultGridParams: GridParams = {
@@ -33,6 +35,7 @@ export const defaultGridParams: GridParams = {
   crosshatch: false,
   overshootM: 10,
   triggerMode: 'interval',
+  startNear: null,
 }
 
 type Line = [LngLat, LngLat]
@@ -77,6 +80,19 @@ export function sweepLines(ring: LngLat[], lineSpacingM: number, angleDeg: numbe
   return lines
 }
 
+/**
+ * A lawnmower pattern can be flown four ways: either end line first, entering from either
+ * side. Pick the variant whose first point is nearest `near`.
+ */
+export function orientLines(lines: Line[], near: LngLat | null): Line[] {
+  if (!near || lines.length === 0) return lines
+  const flip = (ls: Line[]) => ls.map(([a, b]) => [b, a] as Line)
+  const candidates = [lines, [...lines].reverse(), flip(lines), flip([...lines].reverse())]
+  let best = candidates[0]
+  for (const c of candidates) if (distanceM(c[0][0], near) < distanceM(best[0][0], near)) best = c
+  return best
+}
+
 function pointsAlong([a, b]: Line, spacingM: number): LngLat[] {
   const len = distanceM(a, b)
   const count = Math.max(1, Math.floor(len / spacingM)) + 1
@@ -89,9 +105,12 @@ function pointsAlong([a, b]: Line, spacingM: number): LngLat[] {
 export function planGrid(ring: LngLat[], drone: DroneProfile, p: GridParams, name = 'Grid mission'): Mission {
   const { lineSpacingM, photoSpacingM } = gridSpacing(drone.camera, p.altitudeM, p.frontOverlap, p.sideOverlap)
 
-  const passes = [sweepLines(ring, lineSpacingM, p.angleDeg, p.overshootM)]
-  if (p.crosshatch) passes.push(sweepLines(ring, lineSpacingM, p.angleDeg + 90, p.overshootM))
-  const lines = passes.flat()
+  const first = orientLines(sweepLines(ring, lineSpacingM, p.angleDeg, p.overshootM), p.startNear)
+  const lines = [...first]
+  if (p.crosshatch && first.length) {
+    // Second pass starts wherever the first one finished, so there's no long transit.
+    lines.push(...orientLines(sweepLines(ring, lineSpacingM, p.angleDeg + 90, p.overshootM), first.at(-1)![1]))
+  }
 
   const mission: Mission = { name, droneId: drone.id, waypoints: [], intervalSegments: [], photoPoints: [] }
   const wp = (position: LngLat, actions: Waypoint['actions'] = []): Waypoint => ({
