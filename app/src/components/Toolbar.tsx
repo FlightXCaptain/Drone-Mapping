@@ -22,7 +22,7 @@ function hint(s: ReturnType<typeof usePlanner.getState>): string {
   if (s.drawTool === 'point') return 'Tap the subject you want to orbit.'
   if (s.missionType === 'grid') {
     return s.area
-      ? 'Drag to move or reshape. Drag Start to change the entry point.'
+      ? 'Drag to move or reshape. Use ⟳ to rotate the lines, and drag Start to change the entry.'
       : 'Outline the site to plan a mapping flight.'
   }
   return s.orbitCenter

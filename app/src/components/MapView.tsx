@@ -211,6 +211,9 @@ export function MapView({ mission, basemap, flyTo }: { mission: Mission | null; 
       const s = usePlanner.getState()
       if (s.drawTool) return
       if ('points' in e && e.points.length > 1) return // pinch-zoom stays with the map
+      // Handles (corners, rotate knob, Start pin…) are markers inside the map container, so their
+      // presses bubble up here too. They have their own drag – don't also drag what's underneath.
+      if ((e.originalEvent.target as Element | null)?.closest?.('.maplibregl-marker')) return
       const g = grabAt(e.point)
       if (!g) return
       e.preventDefault()
