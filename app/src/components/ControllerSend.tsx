@@ -13,7 +13,7 @@ type Status =
   | { kind: 'checking' }
   | { kind: 'unavailable' } // app not served from the bridge (e.g. hosted copy, or opened from another device)
   | { kind: 'absent'; error: string }
-  | { kind: 'ready'; device: string; missions: RcMission[] }
+  | { kind: 'ready'; device: string; missions: RcMission[]; readAt: number }
 
 async function toBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
@@ -32,7 +32,7 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   // What we last put on the controller, to notice if DJI Fly writes its cached copy back over it.
-  const [sent, setSent] = useState<{ mission: string; waypoints: number } | null>(null)
+  const [sent, setSent] = useState<{ mission: string; waypoints: number; at: number } | null>(null)
 
   const check = useCallback(async () => {
     setStatus({ kind: 'checking' })
@@ -41,7 +41,7 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
       if (!body) return setStatus({ kind: 'unavailable' })
       if (!body.ok) return setStatus({ kind: 'absent', error: body.error ?? '' })
       const missions = body.missions as RcMission[]
-      setStatus({ kind: 'ready', device: body.device as string, missions })
+      setStatus({ kind: 'ready', device: body.device as string, missions, readAt: Date.now() })
       setSlot((s) => (missions.some((m) => m.id === s) ? s : (missions[0]?.id ?? '')))
     } catch {
       setStatus({ kind: 'unavailable' })
@@ -81,7 +81,10 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
           ? { ok: true, text: `Sent and verified: ${body.waypoints} waypoints are now in that mission. The old version is backed up on this PC.` }
           : { ok: false, text: body.error ?? 'Send failed.' },
       )
-      if (body.ok) setSent({ mission: body.mission as string, waypoints: body.waypoints as number })
+      if (body.ok) {
+        setSent({ mission: body.mission as string, waypoints: body.waypoints as number, at: Date.now() })
+        check() // refresh the list so counts are current
+      }
     } catch (e) {
       setResult({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -91,7 +94,8 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
 
   if (status.kind === 'unavailable') return null
 
-  const now = status.kind === 'ready' && sent ? status.missions.find((m) => m.id === sent.mission) : undefined
+  // Only a read taken AFTER the send can show DJI Fly overwriting it; an older list is just stale.
+  const now = status.kind === 'ready' && sent && status.readAt > sent.at ? status.missions.find((m) => m.id === sent.mission) : undefined
   const overwritten = !!now && Number(now.waypoints) !== sent!.waypoints
 
   return (
