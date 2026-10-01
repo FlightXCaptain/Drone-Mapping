@@ -26,6 +26,8 @@ interface Dialect {
   takeOffSecurityHeight: boolean
   firstActionId: number
   compression: 'DEFLATE' | 'STORE'
+  /** DJI Fly only executes waylines.wpml; its own template.kml is a stub with no route. */
+  templateStub: boolean
 }
 
 const DIALECTS: Record<WpmlTarget, Dialect> = {
@@ -36,6 +38,7 @@ const DIALECTS: Record<WpmlTarget, Dialect> = {
     takeOffSecurityHeight: true,
     firstActionId: 0,
     compression: 'DEFLATE',
+    templateStub: false,
   },
   djifly: {
     ns: 'http://www.uav.com/wpmz/1.0.2',
@@ -44,6 +47,7 @@ const DIALECTS: Record<WpmlTarget, Dialect> = {
     takeOffSecurityHeight: false,
     firstActionId: 1,
     compression: 'STORE',
+    templateStub: true,
   },
 }
 
@@ -230,6 +234,18 @@ function placemarks(mission: Mission, kind: 'template' | 'waylines', d: Dialect)
 export function buildTemplateKml(mission: Mission, drone: DroneProfile, target: WpmlTarget, now = Date.now()): string {
   const d = DIALECTS[target]
   const speed = mission.waypoints[0]?.speedMs ?? 5
+  if (d.templateStub) {
+    // Mirrors the template.kml DJI Fly writes itself (verified against a file from an RC 2).
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="${d.ns}">
+  <Document>
+    <wpml:author>${esc(d.author)}</wpml:author>
+    <wpml:createTime>${now}</wpml:createTime>
+    <wpml:updateTime>${now}</wpml:updateTime>${missionConfig(drone, mission, d)}
+  </Document>
+</kml>
+`
+  }
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="${d.ns}">
   <Document>
@@ -292,10 +308,10 @@ export async function buildKmz(mission: Mission, drone: DroneProfile, target: Wp
   if (mission.waypoints.length > drone.maxWaypoints) {
     throw new Error(`${mission.waypoints.length} waypoints exceeds the ${drone.maxWaypoints} limit for ${drone.name}.`)
   }
+  // Exactly two entries, like DJI's own files: no directory entries, no empty res/ folder.
   const zip = new JSZip()
-  zip.file('wpmz/template.kml', buildTemplateKml(mission, drone, target))
-  zip.file('wpmz/waylines.wpml', buildWaylinesWpml(mission, drone, target))
-  zip.folder('wpmz/res')
+  zip.file('wpmz/template.kml', buildTemplateKml(mission, drone, target), { createFolders: false })
+  zip.file('wpmz/waylines.wpml', buildWaylinesWpml(mission, drone, target), { createFolders: false })
   return zip.generateAsync({
     type: 'blob',
     mimeType: 'application/vnd.google-earth.kmz',
