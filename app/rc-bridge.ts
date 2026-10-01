@@ -69,9 +69,29 @@ let busy = false
 
 const handler: Connect.NextHandleFunction = async (req, res, next) => {
   if (!req.url?.startsWith('/api/rc')) return next()
-  if (!localAddresses().has(req.socket.remoteAddress ?? '')) {
+  const local = localAddresses()
+  if (!local.has(req.socket.remoteAddress ?? '')) {
     return json(res, 403, { ok: false, error: 'Sending to a controller only works from the PC it is plugged into.' })
   }
+  // A website open in this PC's browser also connects from a local address, so additionally:
+  //  - Host must be this machine (defeats DNS rebinding, where evil.example resolves to us);
+  //  - Origin, when sent, must be that same host (blocks cross-site form/fetch posts);
+  //  - a custom header is required, which cross-site requests can't add without a CORS
+  //    preflight that we never approve.
+  const hostName = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '')
+  const allowedHosts = new Set(['localhost', ...[...local].filter((a) => !a.startsWith('::ffff:'))])
+  if (!allowedHosts.has(hostName)) return json(res, 403, { ok: false, error: 'Request not from this app.' })
+  const origin = req.headers.origin
+  if (origin) {
+    let originHost = ''
+    try {
+      originHost = new URL(origin).host.toLowerCase()
+    } catch {
+      /* invalid origin */
+    }
+    if (originHost !== (req.headers.host ?? '').toLowerCase()) return json(res, 403, { ok: false, error: 'Request not from this app.' })
+  }
+  if (req.headers['x-drone-mapping'] !== '1') return json(res, 403, { ok: false, error: 'Request not from this app.' })
   if (process.platform !== 'win32') return json(res, 501, { ok: false, error: 'The controller bridge needs Windows.' })
   if (busy) return json(res, 409, { ok: false, error: 'Already talking to the controller. Try again in a moment.' })
   busy = true

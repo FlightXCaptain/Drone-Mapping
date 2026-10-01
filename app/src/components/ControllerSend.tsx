@@ -12,6 +12,9 @@ type Status =
   | { kind: 'absent'; error: string }
   | { kind: 'ready'; device: string; missions: RcMission[] }
 
+/** Required by the bridge; cross-site pages can't send it without a preflight it never approves. */
+const BRIDGE_HEADERS = { 'X-Drone-Mapping': '1' }
+
 async function toBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
   let s = ''
@@ -32,7 +35,7 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
   const check = useCallback(async () => {
     setStatus({ kind: 'checking' })
     try {
-      const res = await fetch('/api/rc')
+      const res = await fetch('/api/rc', { headers: BRIDGE_HEADERS })
       if (res.status === 403 || res.status === 404 || res.status === 501 || !res.headers.get('content-type')?.includes('json')) {
         return setStatus({ kind: 'unavailable' })
       }
@@ -56,7 +59,7 @@ export function ControllerSend({ mission, drone }: { mission: Mission; drone: Dr
       const kmz = await buildKmz(mission, drone, 'djifly')
       const res = await fetch('/api/rc/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...BRIDGE_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ kmzBase64: await toBase64(kmz), mission: slot }),
       })
       const body = await res.json()
