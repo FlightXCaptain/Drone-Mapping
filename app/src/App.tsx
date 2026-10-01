@@ -7,6 +7,7 @@ import { StatsBar } from './components/StatsBar'
 import { SendDialog } from './components/SendDialog'
 import { DroneEditor } from './components/DroneEditor'
 import { PlaceSearch } from './components/PlaceSearch'
+import { SharedPlanPrompt } from './components/SharedPlanPrompt'
 import { useCurrentDrone, usePlanner } from './store'
 import { planGrid } from './domain/planners/grid'
 import { planOrbit, ringRadius } from './domain/planners/orbit'
@@ -67,6 +68,7 @@ export default function App() {
       </div>
 
       {s.sendOpen && mission && <SendDialog mission={mission} />}
+      <SharedPlanPrompt onOpened={(c) => c && setFlyTo([...c])} />
       {s.droneEditor && <DroneEditor initial={s.droneEditor === 'new' ? null : s.droneEditor} />}
     </div>
   )
