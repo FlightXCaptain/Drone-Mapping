@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import { planUrl } from '../share'
+import { copyText } from '../util'
 import { buildKmz } from '../export/wpml'
 import { buildLitchiCsv } from '../export/litchi'
 import { useCurrentDrone, usePlanner } from '../store'
@@ -74,7 +75,7 @@ function HandOff({ compact = false }: { compact?: boolean }) {
   const canShare = typeof navigator.share === 'function'
 
   const copy = async () => {
-    await navigator.clipboard.writeText(url!)
+    if (!(await copyText(url!))) return
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

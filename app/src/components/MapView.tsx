@@ -63,9 +63,16 @@ const fc = (features: GeoJSON.Feature[]): GeoJSON.FeatureCollection => ({ type: 
 const feat = (geometry: GeoJSON.Geometry): GeoJSON.Feature => ({ type: 'Feature', properties: {}, geometry })
 
 /** Layers that can be grabbed, highest priority first. */
-const GRAB_LAYERS = ['ring-hit', 'path-hit', 'orbit-disc', 'area-fill'] as const
+const GRAB_LAYERS = ['ring-hit', 'path-hit', 'orbit-disc', 'area-fill', 'others-hit', 'others-fill'] as const
 type Grab = (typeof GRAB_LAYERS)[number]
-const CURSOR: Record<Grab, string> = { 'ring-hit': 'ew-resize', 'path-hit': 'move', 'orbit-disc': 'move', 'area-fill': 'move' }
+const CURSOR: Record<Grab, string> = {
+  'ring-hit': 'ew-resize',
+  'path-hit': 'move',
+  'orbit-disc': 'move',
+  'area-fill': 'move',
+  'others-hit': 'move',
+  'others-fill': 'move',
+}
 
 function circle(center: LngLat, radiusM: number, steps = 96): LngLat[] {
   const f = localFrame(center)
@@ -150,12 +157,14 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
       }
       // Other parts of the mission: faint, and not draggable (tap their number chip to edit).
       map.addLayer({ id: 'others-fill', type: 'fill', source: 'others', filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#fff', 'fill-opacity': 0.06 } })
-      map.addLayer({ id: 'others-line', type: 'line', source: 'others', paint: { 'line-color': '#fff', 'line-width': 1.5, 'line-opacity': 0.7, 'line-dasharray': [1, 2] } })
+      map.addLayer({ id: 'others-line', type: 'line', source: 'others', filter: ['!=', 'kind', 'disc'], paint: { 'line-color': '#fff', 'line-width': 1.5, 'line-opacity': 0.7, 'line-dasharray': [1, 2] } })
       map.addLayer({ id: 'area-fill', type: 'fill', source: 'area', paint: { 'fill-color': '#fff', 'fill-opacity': 0.14 } })
       map.addLayer({ id: 'area-line', type: 'line', source: 'area', paint: { 'line-color': '#fff', 'line-width': 2, 'line-dasharray': [2, 1.5] } })
       map.addLayer({ id: 'orbit-disc', type: 'fill', source: 'orbit-disc', paint: { 'fill-color': '#fff', 'fill-opacity': 0.12 } })
       map.addLayer({ id: 'path-casing', type: 'line', source: 'mission-path', paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.35 }, layout: { 'line-join': 'round' } })
-      map.addLayer({ id: 'path', type: 'line', source: 'mission-path', paint: { 'line-color': ROUTE, 'line-width': 3 }, layout: { 'line-join': 'round' } })
+      // Whole route dimmed; the part being edited is redrawn bright on top.
+      map.addLayer({ id: 'path', type: 'line', source: 'mission-path', paint: { 'line-color': ROUTE, 'line-width': 2.5, 'line-opacity': 0.45 }, layout: { 'line-join': 'round' } })
+      map.addLayer({ id: 'path-active', type: 'line', source: 'active-path', paint: { 'line-color': ROUTE, 'line-width': 3 }, layout: { 'line-join': 'round' } })
       map.addLayer({
         id: 'photos',
         type: 'circle',
@@ -169,6 +178,7 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
         },
       })
       // Invisible, finger-wide hit areas over thin lines.
+      map.addLayer({ id: 'others-hit', type: 'line', source: 'others', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
       map.addLayer({ id: 'path-hit', type: 'line', source: 'active-path', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 24 } })
       map.addLayer({ id: 'ring-hit', type: 'line', source: 'orbit-ring', paint: { 'line-color': '#000', 'line-opacity': 0, 'line-width': 28 } })
 
@@ -209,28 +219,39 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
 
   // ---- Drag shapes and routes directly ------------------------------------------------------
   function installDragging(map: maplibregl.Map) {
-    const grabAt = (point: maplibregl.Point): Grab | null => {
+    const grabAt = (point: maplibregl.Point): { layer: Grab; partId?: string } | null => {
       const layers = GRAB_LAYERS.filter((l) => map.getLayer(l))
       const hits = map.queryRenderedFeatures(point, { layers: [...layers] })
-      return GRAB_LAYERS.find((l) => hits.some((h) => h.layer.id === l)) ?? null
+      for (const layer of GRAB_LAYERS) {
+        const hit = hits.find((h) => h.layer.id === layer)
+        if (hit) return { layer, partId: hit.properties?.partId as string | undefined }
+      }
+      return null
     }
 
     map.on('mousemove', (e) => {
       if (dragging || usePlanner.getState().drawTool) return
       const g = grabAt(e.point)
-      map.getCanvas().style.cursor = g ? CURSOR[g] : ''
+      map.getCanvas().style.cursor = g ? CURSOR[g.layer] : ''
     })
 
     let dragging = false
     const begin = (e: MapMouseEvent | MapTouchEvent) => {
-      const s = usePlanner.getState()
+      let s = usePlanner.getState()
       if (s.drawTool) return
       if ('points' in e && e.points.length > 1) return // pinch-zoom stays with the map
       // Handles (corners, rotate knob, Start pin…) are markers inside the map container, so their
       // presses bubble up here too. They have their own drag – don't also drag what's underneath.
       if ((e.originalEvent.target as Element | null)?.closest?.('.maplibregl-marker')) return
-      const g = grabAt(e.point)
-      if (!g) return
+      const hit = grabAt(e.point)
+      if (!hit) return
+      let g: Grab = hit.layer
+      // Grabbing another part switches to it and moves it, all in one gesture.
+      if ((g === 'others-hit' || g === 'others-fill') && hit.partId) {
+        s.selectPart(hit.partId)
+        s = usePlanner.getState()
+        g = s.missionType === 'grid' ? 'area-fill' : 'orbit-disc'
+      }
       e.preventDefault()
       map.dragPan.disable()
       dragging = true
@@ -306,11 +327,12 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
     const others: GeoJSON.Feature[] = []
     for (const p of parts) {
       if (p.id === activePartId) continue
-      if (p.missionType === 'grid' && p.area) others.push(feat({ type: 'Polygon', coordinates: [p.area] }))
+      const tag = (f: GeoJSON.Feature, kind = 'shape') => ({ ...f, properties: { partId: p.id, kind } })
+      if (p.missionType === 'grid' && p.area) others.push(tag(feat({ type: 'Polygon', coordinates: [p.area] })))
       if (p.missionType === 'orbit' && p.orbitCenter) {
-        for (const r of new Set(p.orbit.rings.map((x) => x.radiusM ?? p.orbit.radiusM))) {
-          others.push(feat({ type: 'LineString', coordinates: circle(p.orbitCenter, r) }))
-        }
+        const radii = [...new Set(p.orbit.rings.map((x) => x.radiusM ?? p.orbit.radiusM))]
+        others.push(tag(feat({ type: 'Polygon', coordinates: [circle(p.orbitCenter, Math.max(...radii))] }), 'disc'))
+        for (const r of radii) others.push(tag(feat({ type: 'LineString', coordinates: circle(p.orbitCenter, r) })))
       }
     }
     set('others', fc(others))

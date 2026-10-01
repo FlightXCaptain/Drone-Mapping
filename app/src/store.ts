@@ -1,3 +1,4 @@
+import { uid } from './util'
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { BUILTIN_DRONES } from './domain/drones'
@@ -27,7 +28,7 @@ const PART_KEYS = ['missionType', 'area', 'orbitCenter', 'grid', 'orbit', 'subje
 
 export function newPart(missionType: MissionType, from?: Partial<Part>): Part {
   return {
-    id: crypto.randomUUID(),
+    id: uid(),
     missionType,
     area: null,
     orbitCenter: null,
@@ -112,7 +113,7 @@ export const usePlanner = create<PlannerState>()(
     (set, get) => ({
       customDrones: [],
       parts: [],
-      activePartId: crypto.randomUUID(),
+      activePartId: uid(),
       droneId: BUILTIN_DRONES[0].id,
       missionType: 'grid',
       missionName: 'Untitled mission',
@@ -260,7 +261,7 @@ export const usePlanner = create<PlannerState>()(
         return {
           ...s,
           parts: s.parts ?? [],
-          activePartId: s.activePartId || crypto.randomUUID(),
+          activePartId: s.activePartId || uid(),
           grid: { ...defaultGridParams, ...s.grid },
           orbit: { ...defaultOrbitParams, ...s.orbit },
         } as PlannerState

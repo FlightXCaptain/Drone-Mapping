@@ -1,3 +1,4 @@
+import { uid } from '../util'
 import { useState } from 'react'
 import { useAllDrones, useCurrentDrone, usePlanner } from '../store'
 import { altitudeForGsd, gsdCm, gridSpacing } from '../domain/photogrammetry'
@@ -277,7 +278,7 @@ export function ControlCard() {
           </select>
           <button
             className="text-btn"
-            onClick={() => s.setDroneEditor(drone.builtin ? { ...drone, id: crypto.randomUUID(), name: `${drone.name} (mine)`, builtin: false } : drone)}
+            onClick={() => s.setDroneEditor(drone.builtin ? { ...drone, id: uid(), name: `${drone.name} (mine)`, builtin: false } : drone)}
           >
             {drone.builtin ? 'Copy and adjust specs' : 'Edit specs'}
           </button>
