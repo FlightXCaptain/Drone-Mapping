@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
-import { bearingDeg, distanceM } from '../domain/geo'
+import { bearingDeg } from '../domain/geo'
+import { missionStats } from '../domain/stats'
 import type { DroneProfile, Mission, Waypoint } from '../domain/types'
 
 /**
@@ -280,13 +281,8 @@ export function buildTemplateKml(mission: Mission, drone: DroneProfile, target: 
 export function buildWaylinesWpml(mission: Mission, drone: DroneProfile, target: WpmlTarget): string {
   const d = DIALECTS[target]
   const speed = mission.waypoints[0]?.speedMs ?? 5
-  let distance = 0
-  let duration = 0
-  for (let i = 1; i < mission.waypoints.length; i++) {
-    const leg = distanceM(mission.waypoints[i - 1].position, mission.waypoints[i].position)
-    distance += leg
-    duration += leg / mission.waypoints[i].speedMs
-  }
+  // Same estimate the app shows (includes photo stops and climbs), so both agree.
+  const { distanceM: distance, durationS: duration } = missionStats(mission, drone)
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:wpml="${d.ns}">
   <Document>${missionConfig(drone, mission, d)}

@@ -1000,3 +1000,31 @@
   color: #fff;
   cursor: default;
 }
+
+/* ---------- Send to a plugged-in controller ---------- */
+.controller {
+  border: 2px solid var(--act);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.controller h3 {
+  margin: 0;
+}
+.controller .fine {
+  margin: 0;
+}
+.controller-row {
+  display: flex;
+  gap: 8px;
+}
+.controller-row select {
+  flex: 1;
+}
+.success {
+  margin: 0;
+  color: var(--start);
+  font-weight: 600;
+}

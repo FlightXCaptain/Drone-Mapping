@@ -1,6 +1,7 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
+import { rcBridge } from './rc-bridge.ts'
 
 const DAY = 24 * 60 * 60
 
@@ -8,6 +9,8 @@ const DAY = 24 * 60 * 60
 export default defineConfig({
   plugins: [
     react(),
+    // USB hand-off to a DJI RC 2 plugged into this PC (see rc-bridge.ts).
+    rcBridge(),
     // Installable, offline-capable app for the field. Map tiles you've viewed are kept so a
     // site you looked at before leaving still shows with no signal.
     VitePWA({
@@ -31,6 +34,7 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // MapLibre bundle is ~1 MB+
         navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/(server\.arcgisonline\.com|clarity\.maptiles\.arcgis\.com)\/.*\/tile\//,

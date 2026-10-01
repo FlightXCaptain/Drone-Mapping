@@ -7,6 +7,7 @@ import { buildLitchiCsv } from '../export/litchi'
 import { useCurrentDrone, usePlanner } from '../store'
 import type { ExportTarget, Mission } from '../domain/types'
 import { Dialog } from './Dialog'
+import { ControllerSend } from './ControllerSend'
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
@@ -148,6 +149,7 @@ export function SendDialog({ mission }: { mission: Mission }) {
 
   return (
     <Dialog title="Send to drone" onClose={close}>
+      {drone.exportTargets.includes('djifly') && <ControllerSend mission={mission} drone={drone} />}
       {!touch && <HandOff />}
       <h3 className="section-title">{touch ? `Save for ${drone.name}` : `Or save it on this device for ${drone.name}`}</h3>
       <div className="targets">

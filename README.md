@@ -36,3 +36,12 @@ connected by USB, and **DJI Fly closed**:
 ```
 
 The placeholder's thumbnail in DJI Fly keeps showing the old route; open the mission to see the new one.
+
+**Safety:** the helper only ever writes `waypoint/<UUID>/<UUID>.kmz`, validates the mission first,
+refuses to change anything without a verified backup (kept in `Documents\Drone Mapping\backups`),
+verifies by hash afterwards and restores automatically on mismatch. Every action is logged to
+`Documents\Drone Mapping\send-log.txt`. Put a backup back with
+`.\tools\send-to-dji-fly.ps1 -Restore "<backup file>"`.
+
+In the app, **Send to drone** shows *Send to DJI RC 2* when the app is opened on the PC the
+controller is plugged into (served by `npm run dev` / `npm run preview`).
