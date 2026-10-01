@@ -118,9 +118,18 @@ function Get-FileName($item) {
 }
 function Test-ItemName($item, [string]$name) {
   if ($item.IsFolder) { return $item.Name -ceq $name }
-  if ((Get-FileName $item) -ceq $name -or $item.Name -ceq $name) { return $true }
+  if ((Get-FileName $item) -ieq $name -or $item.Name -ieq $name) { return $true }
   $ext = [IO.Path]::GetExtension($name)
-  return $ext -and $item.Name -ceq $name.Substring(0, $name.Length - $ext.Length)
+  return $ext -and $item.Name -ieq $name.Substring(0, $name.Length - $ext.Length)
+}
+# A mission's KMZ: normally <UUID>.kmz inside the <UUID> folder. If a DJI Fly version names it
+# differently, use the folder's ONLY .kmz file; with several we refuse rather than guess.
+function Get-MissionKmz($folder, [string]$uuid) {
+  $item = Get-Child $folder "$uuid.kmz"
+  if ($item) { return $item }
+  $kmzs = @($folder.Items() | Where-Object { -not $_.IsFolder -and (Get-FileName $_) -match '\.kmz$' })
+  if ($kmzs.Count -eq 1) { return $kmzs[0] }
+  return $null
 }
 function Get-Child($folder, [string]$name) {
   return $folder.Items() | Where-Object { Test-ItemName $_ $name } | Select-Object -First 1
@@ -196,7 +205,7 @@ if ($Fetch) {
   if (-not $Out) { Fail 'Fetch needs -Out <file>.' }
   $m = $missions | Where-Object { $_.Name -ieq $Mission } | Select-Object -First 1
   if (-not $m) { Fail "Mission $Mission isn't on the controller." }
-  $item = Get-Child $m.GetFolder "$($m.Name).kmz"
+  $item = Get-MissionKmz $m.GetFolder $m.Name
   if (-not $item) { Fail "Mission $Mission has no KMZ file." }
   try { $copied = Copy-FromDevice $item (Join-Path $script:tmp 'fetch') } catch { Fail $_.Exception.Message }
   Copy-Item $copied $Out -Force
@@ -209,7 +218,7 @@ if ($Fetch) {
 $rows = @()
 for ($i = 0; $i -lt $missions.Count; $i++) {
   $m = $missions[$i]
-  $item = Get-Child $m.GetFolder "$($m.Name).kmz"
+  $item = Get-MissionKmz $m.GetFolder $m.Name
   $count = 'none'
   if ($item) { try { $count = Test-DjiFlyKmz (Copy-FromDevice $item (Join-Path $script:tmp "peek$i")) } catch { $count = 'unreadable' } }
   $rows += [pscustomobject]@{ No = $i + 1; Mission = $m.Name; Waypoints = $count }
@@ -255,9 +264,10 @@ if ($Mission) {
   $target = $missions[[int]$pick - 1]
 }
 $uuid = $target.Name
-$fileName = "$uuid.kmz"
 $targetDir = $target.GetFolder
-$oldItem = Get-Child $targetDir $fileName
+$oldItem = Get-MissionKmz $targetDir $uuid
+# The exact name DJI Fly uses for this mission's file; the new file is written under it.
+$fileName = if ($oldItem) { Get-FileName $oldItem } else { "$uuid.kmz" }
 if (-not $oldItem) { Fail "Mission $uuid has no $fileName. Open and save it once in DJI Fly, then try again." }
 
 # ---- Backup: mandatory and verified -------------------------------------------------------------
