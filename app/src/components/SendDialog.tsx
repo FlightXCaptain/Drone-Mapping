@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
+import { planUrl } from '../share'
 import { buildKmz } from '../export/wpml'
 import { buildLitchiCsv } from '../export/litchi'
 import { useCurrentDrone, usePlanner } from '../store'
@@ -48,11 +50,85 @@ const TARGETS: Record<ExportTarget, { app: string; file: string; summary: string
   },
 }
 
+/** QR code + link that opens this exact plan on another device (no server involved). */
+function HandOff({ compact = false }: { compact?: boolean }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [qr, setQr] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    planUrl(usePlanner.getState().toPlan()).then(async (u) => {
+      const img = await QRCode.toDataURL(u, { errorCorrectionLevel: 'L', margin: 1, width: 360, color: { dark: '#13294b', light: '#ffffff' } })
+      if (live) {
+        setUrl(u)
+        setQr(img)
+      }
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname)
+  const canShare = typeof navigator.share === 'function'
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(url!)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (compact) {
+    return (
+      <section className="handoff-row">
+        <span>Send to another device</span>
+        {canShare && url && (
+          <button className="btn" onClick={() => navigator.share({ title: usePlanner.getState().missionName, url }).catch(() => {})}>
+            Share link
+          </button>
+        )}
+        <button className="btn" disabled={!url} onClick={copy}>
+          {copied ? 'Copied' : 'Copy link'}
+        </button>
+      </section>
+    )
+  }
+
+  return (
+    <section className="handoff">
+      <div className="qr">{qr ? <img src={qr} alt="QR code that opens this mission on another device" /> : <span className="qr-wait" />}</div>
+      <div className="handoff-text">
+        <h3>Open on your phone</h3>
+        <p>Scan with the phone that flies the drone. The mission opens there, ready to save into the flight app.</p>
+        <p className="fine">For controllers without a camera, send yourself the link instead.</p>
+        <div className="handoff-actions">
+          {canShare && url && (
+            <button className="btn" onClick={() => navigator.share({ title: usePlanner.getState().missionName, url }).catch(() => {})}>
+              Share link
+            </button>
+          )}
+          <button
+            className="btn"
+            disabled={!url}
+            onClick={copy}
+          >
+            {copied ? 'Copied' : 'Copy link'}
+          </button>
+        </div>
+        {local && <p className="error">This app is running on localhost, so other devices can't open the link. Open it using this computer's network address, or a hosted copy.</p>}
+      </div>
+    </section>
+  )
+}
+
 export function SendDialog({ mission }: { mission: Mission }) {
   const drone = useCurrentDrone()
   const close = () => usePlanner.getState().setSendOpen(false)
   const [sent, setSent] = useState<ExportTarget | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Phones/tablets most likely ARE the flight device, so lead with saving; desktops lead with the QR.
+  const touch = window.matchMedia('(pointer: coarse)').matches
 
   async function send(target: ExportTarget) {
     setError(null)
@@ -70,9 +146,8 @@ export function SendDialog({ mission }: { mission: Mission }) {
 
   return (
     <Dialog title="Send to drone" onClose={close}>
-      <p className="dialog-lede">
-        Download the mission for <strong>{drone.name}</strong>, then load it in the flight app.
-      </p>
+      {!touch && <HandOff />}
+      <h3 className="section-title">{touch ? `Save for ${drone.name}` : `Or save it on this device for ${drone.name}`}</h3>
       <div className="targets">
         {drone.exportTargets.map((t) => (
           <button key={t} className={`target ${sent === t ? 'done' : ''}`} onClick={() => send(t)}>
@@ -93,6 +168,7 @@ export function SendDialog({ mission }: { mission: Mission }) {
           </ol>
         </section>
       )}
+      {touch && <HandOff compact />}
       <p className="fine">Always check the route in the flight app before take-off. You are responsible for every flight.</p>
     </Dialog>
   )

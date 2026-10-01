@@ -5,6 +5,7 @@ import { defaultGridParams, type GridParams } from './domain/planners/grid'
 import { aimPitch, autoRings, defaultOrbitParams, ringRadius, type OrbitParams } from './domain/planners/orbit'
 import type { DroneProfile, LngLat } from './domain/types'
 import type { OrbitRing } from './domain/planners/orbit'
+import type { SharedPlan } from './share'
 
 export type MissionType = 'grid' | 'orbit'
 /** Only used while sketching something new; existing shapes are always directly editable. */
@@ -44,11 +45,13 @@ interface PlannerState {
   setDrawTool: (t: DrawTool) => void
   setSendOpen: (o: boolean) => void
   setDroneEditor: (d: DroneProfile | 'new' | null) => void
+  loadPlan: (p: SharedPlan) => void
+  toPlan: () => SharedPlan
 }
 
 export const usePlanner = create<PlannerState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       customDrones: [],
       droneId: BUILTIN_DRONES[0].id,
       missionType: 'grid',
@@ -126,6 +129,34 @@ export const usePlanner = create<PlannerState>()(
       setDrawTool: (drawTool) => set({ drawTool }),
       setSendOpen: (sendOpen) => set({ sendOpen }),
       setDroneEditor: (droneEditor) => set({ droneEditor }),
+      loadPlan: (p) =>
+        set((s) => ({
+          missionName: p.name,
+          missionType: p.type,
+          customDrones: p.customDrone ? [...s.customDrones.filter((d) => d.id !== p.customDrone!.id), p.customDrone] : s.customDrones,
+          droneId: p.droneId,
+          area: p.area ?? (p.type === 'grid' ? null : s.area),
+          orbitCenter: p.center ?? (p.type === 'orbit' ? null : s.orbitCenter),
+          grid: p.grid ? { ...defaultGridParams, ...p.grid } : s.grid,
+          orbit: p.orbit ? { ...defaultOrbitParams, ...p.orbit } : s.orbit,
+          subjectHeightM: p.subjectHeightM ?? s.subjectHeightM,
+          ringCount: p.orbit?.rings.length ?? s.ringCount,
+          drawTool: null,
+        })),
+      toPlan: (): SharedPlan => {
+        const s: PlannerState = get()
+        const custom = s.customDrones.find((d) => d.id === s.droneId)
+        return {
+          v: 1,
+          name: s.missionName,
+          type: s.missionType,
+          droneId: s.droneId,
+          ...(custom ? { customDrone: custom } : {}),
+          ...(s.missionType === 'grid'
+            ? { area: s.area, grid: s.grid }
+            : { center: s.orbitCenter, orbit: s.orbit, subjectHeightM: s.subjectHeightM }),
+        }
+      },
     }),
     {
       name: 'drone-planner',
