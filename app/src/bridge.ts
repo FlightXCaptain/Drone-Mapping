@@ -111,6 +111,8 @@ export interface Job {
   name: string
   kind: JobKind
   quality: Quality
+  /** Photogrammetry only: false = map only (fast orthophoto, no 3D model). */
+  model3d?: boolean
   photos: number
   status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted' | 'elsewhere'
   stage: string
@@ -119,7 +121,7 @@ export interface Job {
   error?: string
   dir: string
   bounds?: [number, number, number, number] | null
-  outputs?: { orthophoto?: string; tiles?: string | null; model?: string | null; splat?: string; pointCloud?: string | null }
+  outputs?: { orthophoto?: string; tiles?: string | null; model?: string | null; splat?: string; pointCloud?: string | null; pointCloudPly?: string | null }
 }
 export interface JobProgress {
   id: string
@@ -136,8 +138,8 @@ export async function pickFolder(): Promise<string | null> {
   return typeof r === 'string' ? r : null
 }
 export const photosScan = (folder: string) => invoke<PhotoScan>('photos_scan', { folder })
-export const jobStart = (kind: JobKind, name: string, photos: string[], quality: Quality) =>
-  invoke<BridgeResult & { id?: string }>('job_start', { kind, name, photos, quality })
+export const jobStart = (kind: JobKind, name: string, photos: string[], quality: Quality, model3d = true) =>
+  invoke<BridgeResult & { id?: string }>('job_start', { kind, name, photos, quality, model3d })
 export const jobCancel = (id: string) => invoke<BridgeResult>('job_cancel', { id })
 export const jobsList = () => invoke<{ ok: boolean; root: string; jobs: Job[]; running: string | null }>('jobs_list')
 export const jobOpen = (id: string, what: 'folder' | 'model' | 'orthophoto' | 'splat') => invoke<BridgeResult>('job_open', { id, what })

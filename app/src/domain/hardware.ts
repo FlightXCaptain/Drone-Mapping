@@ -47,10 +47,13 @@ export function bestGpu(hw: Hardware) {
 const ODM_MIN_PER_PHOTO: Record<Quality, number> = { fast: 0.9, standard: 1.8, high: 4.5 }
 const ODM_PHOTOS_PER_GB: Record<Quality, number> = { fast: 22, standard: 15, high: 7 }
 
-export function mapFit(hw: Hardware, photos: number, quality: Quality = 'standard'): Fit {
-  const comfortable = Math.round(hw.ramGb * ODM_PHOTOS_PER_GB[quality])
+/** Map only (fast orthophoto) skips the dense cloud, mesh and 3D texturing: roughly a third of the work. */
+const MAP_ONLY_SHARE = 0.3
+
+export function mapFit(hw: Hardware, photos: number, quality: Quality = 'standard', model3d = true): Fit {
+  const comfortable = Math.round(hw.ramGb * ODM_PHOTOS_PER_GB[quality] * (model3d ? 1 : 2))
   const speed = Math.min(2, Math.max(0.4, hw.cores / 8))
-  const minutes = photos > 0 ? (photos * ODM_MIN_PER_PHOTO[quality]) / speed : null
+  const minutes = photos > 0 ? (photos * ODM_MIN_PER_PHOTO[quality] * (model3d ? 1 : MAP_ONLY_SHARE)) / speed : null
   const spec = `${Math.round(hw.ramGb)} GB memory, ${hw.cores} threads`
   const time = minutes != null ? ` ${cap(duration(minutes))} for ${photos} photos.` : ''
 
@@ -66,7 +69,15 @@ export function mapFit(hw: Hardware, photos: number, quality: Quality = 'standar
   if (minutes != null && minutes > 240) rating = worst(rating, 'slow')
   else if (minutes != null && minutes > 90) rating = worst(rating, 'ok')
   const advice =
-    rating === 'good' ? '' : photos > comfortable ? ` Fewer than ${comfortable} photos would be safer.` : quality !== 'fast' ? ' Fast is quicker.' : ''
+    rating === 'good'
+      ? ''
+      : photos > comfortable
+        ? ` Fewer than ${comfortable} photos would be safer.`
+        : model3d
+          ? ' Map only is much quicker.'
+          : quality !== 'fast'
+            ? ' Fast is quicker.'
+            : ''
   return { rating, message: `${spec}.${time}${advice}`, minutes }
 }
 

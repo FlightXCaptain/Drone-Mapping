@@ -328,6 +328,8 @@ fn fraction(line: &str) -> Option<f64> {
 
 struct Preset {
     odm: &'static [&'static str],
+    /// Extra ODM settings when building the 3D model.
+    odm_mesh: &'static [&'static str],
     colmap_quality: &'static str,
     brush_steps: u32,
     brush_resolution: u32,
@@ -335,14 +337,33 @@ struct Preset {
 
 fn preset(quality: &str) -> Preset {
     match quality {
-        "fast" => Preset { odm: &["--pc-quality", "low", "--feature-quality", "medium"], colmap_quality: "low", brush_steps: 5000, brush_resolution: 1024 },
-        "high" => Preset { odm: &["--pc-quality", "high", "--feature-quality", "ultra"], colmap_quality: "high", brush_steps: 30000, brush_resolution: 1920 },
-        _ => Preset { odm: &[], colmap_quality: "medium", brush_steps: 15000, brush_resolution: 1600 },
+        "fast" => Preset {
+            odm: &["--pc-quality", "low", "--feature-quality", "medium"],
+            // Full mesh detail even on Fast: a lighter mesh saves minutes but sags over large,
+            // plain roofs. For speed, use Map only instead.
+            odm_mesh: &[],
+            colmap_quality: "low", brush_steps: 5000,
+            brush_resolution: 1024,
+        },
+        "high" => Preset { odm: &["--pc-quality", "high", "--feature-quality", "ultra"], odm_mesh: &[], colmap_quality: "high", brush_steps: 30000, brush_resolution: 1920 },
+        _ => Preset { odm: &[], odm_mesh: &[], colmap_quality: "medium", brush_steps: 15000, brush_resolution: 1600 },
     }
 }
 
 #[tauri::command]
-pub fn job_start(app: AppHandle, state: State<'_, JobState>, kind: String, name: String, photos: Vec<String>, quality: String) -> Value {
+#[allow(clippy::too_many_arguments)]
+pub fn job_start(
+    app: AppHandle,
+    state: State<'_, JobState>,
+    kind: String,
+    name: String,
+    photos: Vec<String>,
+    quality: String,
+    model3d: Option<bool>,
+) -> Value {
+    // Photogrammetry: the textured 3D model is most of the work; without it ODM makes the map
+    // straight from the sparse reconstruction, several times faster.
+    let model3d = model3d.unwrap_or(true);
     let fail = |e: &str| json!({ "ok": false, "error": e });
     let pack = match kind.as_str() {
         "map" => "photogrammetry",
@@ -370,7 +391,7 @@ pub fn job_start(app: AppHandle, state: State<'_, JobState>, kind: String, name:
         return fail(&format!("Couldn't create {}: {e}", dir.display()));
     }
     let job = json!({
-        "id": id, "name": name, "kind": kind, "quality": quality, "photos": photos.len(),
+        "id": id, "name": name, "kind": kind, "quality": quality, "model3d": model3d, "photos": photos.len(),
         "status": "running", "stage": "Starting", "startedAt": unix_now(), "pid": std::process::id(),
     });
     write_job(&dir, &job);
@@ -383,7 +404,8 @@ pub fn job_start(app: AppHandle, state: State<'_, JobState>, kind: String, name:
     std::thread::spawn(move || {
         let started = Instant::now();
         let mut job = job;
-        let result = run_job(&app, &running, &dir, &pack_dir, &kind, &photos, &quality, &mut job);
+        let result = run_job(&app, &running, &dir, &pack_dir, &kind, &photos, &quality, model3d, &mut job)
+            .map_err(|e| if running.cancel.load(Ordering::SeqCst) { e } else { blocked_hint(&dir).unwrap_or(e) });
         job["finishedAt"] = json!(unix_now());
         job["seconds"] = json!(started.elapsed().as_secs());
         let (status, message) = match &result {
@@ -403,7 +425,7 @@ pub fn job_start(app: AppHandle, state: State<'_, JobState>, kind: String, name:
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &str, photos: &[String], quality: &str, job: &mut Value) -> Result<(), String> {
+fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &str, photos: &[String], quality: &str, model3d: bool, job: &mut Value) -> Result<(), String> {
     let mut log = File::create(dir.join("log.txt")).map_err(|e| e.to_string())?;
     let emit = |stage: &str, pct: f64, line: &str| {
         let _ = app.emit("job-progress", Progress { id: running.id.clone(), name: running.name.clone(), kind: running.kind.clone(), stage: stage.into(), pct: (pct * 100.0).clamp(0.0, 100.0), line: line.into() });
@@ -457,8 +479,13 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
             .arg("--project-path")
             .arg(parent)
             .arg(dir.file_name().ok_or("Bad job folder")?)
-            .args(["--tiles", "--gltf", "--skip-report"])
+            .args(["--tiles", "--skip-report"])
             .args(p.odm);
+        if model3d {
+            cmd.arg("--gltf").args(p.odm_mesh);
+        } else {
+            cmd.arg("--fast-orthophoto");
+        }
         let mut stage = "Starting";
         let mut at = 0.03;
         run_logged(
@@ -489,6 +516,8 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
                 dir.join("odm_texturing").join("odm_textured_model.obj"),
             ]),
             "pointCloud": first_existing(&[dir.join("odm_georeferencing").join("odm_georeferenced_model.laz")]),
+            // The same cloud as plain PLY in the model's local frame, for the built-in viewer.
+            "pointCloudPly": first_existing(&[dir.join("odm_filterpoints").join("point_cloud.ply")]),
             "dem": first_existing(&[dir.join("odm_dem").join("dsm.tif")]),
         });
         return Ok(());
@@ -602,6 +631,26 @@ fn latest_checkpoint(out: &Path) -> Option<(u32, PathBuf)> {
     Some(newest)
 }
 
+/// Windows security (e.g. a Defender attack-surface rule) stopping one of the engine's own
+/// programs shows up only as "Access is denied" in the log. Say so plainly, naming the program.
+fn blocked_hint(dir: &Path) -> Option<String> {
+    let log = fs::read_to_string(dir.join("log.txt")).ok()?;
+    let at = log.find("Access is denied")?;
+    let program = log[..at]
+        .lines()
+        .rev()
+        .find_map(|l| {
+            let l = l.trim_start_matches("[INFO]").trim();
+            let exe = l.strip_prefix("running ")?.trim_start_matches('"');
+            let exe = exe.split(['"', ' ']).next()?;
+            Path::new(exe).file_name().map(|n| n.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| "one of its programs".into());
+    Some(format!(
+        "Windows security blocked {program}, part of the processing tools. Allow the folder %LOCALAPPDATA%\\com.flightxcaptain.dronemapping\\engines (or ask IT to), then run the job again."
+    ))
+}
+
 /// ODM's `--tiles` output: TMS tiles of the orthophoto, at `<job>\orthophoto_tiles`.
 fn tiles_dir(dir: &Path) -> Option<String> {
     let t = dir.join("orthophoto_tiles");
@@ -661,8 +710,13 @@ pub fn jobs_list(app: AppHandle, state: State<'_, JobState>) -> Value {
                 let elsewhere = j["pid"].as_u64().is_some_and(|pid| app_alive(pid as u32));
                 j["status"] = json!(if elsewhere { "elsewhere" } else { "interrupted" });
             }
-            if j["kind"] == "map" && j["status"] == "done" && j["outputs"]["tiles"].is_null() {
-                j["outputs"]["tiles"] = json!(tiles_dir(&path));
+            if j["kind"] == "map" && j["status"] == "done" {
+                if j["outputs"]["tiles"].is_null() {
+                    j["outputs"]["tiles"] = json!(tiles_dir(&path));
+                }
+                if j["outputs"]["pointCloudPly"].is_null() {
+                    j["outputs"]["pointCloudPly"] = json!(first_existing(&[path.join("odm_filterpoints").join("point_cloud.ply")]));
+                }
             }
             j["dir"] = json!(path.to_string_lossy());
             j
@@ -862,6 +916,22 @@ mod tests {
         got.sort();
         assert_eq!(got, ["m_geo.mtl", "m_geo.obj", "m_geo_material0000_map_Kd.png", "ortho.tif"]);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn explains_blocked_programs() {
+        let dir = std::env::temp_dir().join(format!("dm-blocked-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("log.txt"),
+            "[INFO]    running \"C:\\x\\bin\\dem2points\" -inputFile \"a.tif\"\nAccess is denied.\n",
+        )
+        .unwrap();
+        let hint = blocked_hint(&dir).unwrap();
+        assert!(hint.contains("dem2points"), "{hint}");
+        fs::write(dir.join("log.txt"), "all fine").unwrap();
+        assert!(blocked_hint(&dir).is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

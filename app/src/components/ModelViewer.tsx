@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 
 export interface ViewerModel {
   title: string
-  kind: 'mesh' | 'splat'
-  /** Local file path of a .glb / .obj (mesh) or .ply (splat). */
+  kind: 'mesh' | 'splat' | 'points'
+  /** Local file path of a .glb / .obj (mesh), or a .ply (splat or point cloud). */
   path: string
 }
 
@@ -16,6 +16,7 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
   const host = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState('Loading…')
   const resetView = useRef<() => void>(() => {})
+  const pointSize = useRef<(f: number) => void>(() => {})
 
   useEffect(() => {
     let disposed = false
@@ -72,6 +73,20 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
               ? new THREE.Box3(new THREE.Vector3(pct(xs, 0.05), pct(ys, 0.05), pct(zs, 0.05)), new THREE.Vector3(pct(xs, 0.95), pct(ys, 0.95), pct(zs, 0.95)))
               : splat.getBoundingBox(true).applyMatrix4(splat.matrixWorld),
           )
+        } else if (model.kind === 'points') {
+          const { PLYLoader } = await import('three/examples/jsm/loaders/PLYLoader.js')
+          const geometry = await new PLYLoader().loadAsync(url, onProgress)
+          const material = new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: geometry.hasAttribute('color') })
+          pointSize.current = (f) => {
+            material.size = Math.min(12, Math.max(1, material.size * f))
+          }
+          object = new THREE.Points(geometry, material)
+          // Same z-up site frame as the 3D model.
+          object.rotation.x = -Math.PI / 2
+          object.updateMatrixWorld(true)
+          controls.maxPolarAngle = Math.PI / 2 - 0.02
+          scene.add(object)
+          frame(new THREE.Box3().setFromObject(object))
         } else {
           if (/\.glb$/i.test(model.path)) {
             const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
@@ -87,6 +102,19 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
           }
           // OpenDroneMap models are z-up; stand them up for three.js's y-up camera controls,
           // and keep the camera above ground: a site is looked at from the air.
+          // Anisotropic filtering: keeps fine repeating detail (corrugated roofs, car parks) from
+          // turning into moiré stripes when seen at a glancing angle.
+          const aniso = renderer.capabilities.getMaxAnisotropy()
+          object.traverse((o) => {
+            const mats = (o as import('three').Mesh).material
+            for (const m of Array.isArray(mats) ? mats : mats ? [mats] : []) {
+              const map = (m as import('three').MeshBasicMaterial).map
+              if (map) {
+                map.anisotropy = aniso
+                map.needsUpdate = true
+              }
+            }
+          })
           object.rotation.x = -Math.PI / 2
           object.updateMatrixWorld(true)
           controls.maxPolarAngle = Math.PI / 2 - 0.02
@@ -159,6 +187,16 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
         <b>{model.title}</b>
         <span className="fine">Drag to turn · right-drag or Shift-drag to move · scroll to zoom</span>
         <span className="spacer" />
+        {model.kind === 'points' && (
+          <>
+            <button className="btn" onClick={() => pointSize.current(1 / 1.5)} aria-label="Smaller points" title="Smaller points">
+              −
+            </button>
+            <button className="btn" onClick={() => pointSize.current(1.5)} aria-label="Larger points" title="Larger points">
+              +
+            </button>
+          </>
+        )}
         <button className="btn" onClick={() => resetView.current()}>
           Reset view
         </button>

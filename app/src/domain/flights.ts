@@ -6,6 +6,9 @@ export function exifTime(s: string | null | undefined): number | null {
   return new Date(y, mo - 1, d, h, mi, se).getTime()
 }
 
+/** Stable id for a flight within one folder, for remembering which are ticked. */
+export const flightKey = (f: { start: number; photos: unknown[] }) => `${f.start}:${f.photos.length}`
+
 export interface Flight<T> {
   start: number
   end: number

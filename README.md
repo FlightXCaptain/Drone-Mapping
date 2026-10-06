@@ -89,28 +89,33 @@ heights.
 
 1. **Get the photos in.** Plug in the DJI controller, the drone or a card reader. The app spots
    DJI photos and offers them ("21 photos found on DJI RC 2 · SD card"). Or click **Process
-   photos** in the bottom bar and choose or paste a folder. Photos are grouped by flight, so a
-   card with several jobs on it isn't a problem.
+   photos** in the bottom bar and choose or paste a folder. Add **several folders to one job**,
+   e.g. one per orbit ring or level. Photos are grouped by flight with tick boxes, so a card
+   with several jobs on it isn't a problem.
 2. **Check coverage.** Each photo's GPS position is matched to the plan: taken shots show green
    on the map, **missed shots red**. That's ideal for a reshoot before you leave site.
 3. **Make it.** The app rates how well this PC will cope and estimates the time (memory and
    processor for photogrammetry, graphics card for splats). Pick **Fast / Standard / High** and
    make a:
    - **Photogrammetry model** with [OpenDroneMap](https://opendronemap.org): a georeferenced
-     orthophoto, a textured 3D model (GLB/OBJ) and a point cloud (LAZ).
+     orthophoto, a textured 3D model (GLB/OBJ) and a point cloud (LAZ). Choose **Map + 3D
+     model**, or **Map only** for just the orthophoto, which is several times quicker.
    - **Gaussian splat model** with [COLMAP](https://colmap.github.io) and
      [Brush](https://github.com/ArthurBrussee/brush): camera positions, then a splat (PLY)
      trained on the graphics card.
 
    Minimise the window and keep planning: the **Process photos** button becomes the job's
    progress bar.
-4. **Use it.** **Show on map** lays the orthophoto over the live satellite map. **View 3D model**
-   and **View splat** open the built-in 3D viewer. **Save files…** copies the deliverables
+4. **Use it.** **Show on map** lays the orthophoto over the live satellite map. **View 3D model**,
+   **View point cloud** and **View splat** open the built-in 3D viewer. The point cloud shows
+   exactly where the data is solid and where it has gaps. **Save files…** copies the deliverables
    (GeoTIFF, model with textures, point cloud, splat) to any folder, ready to hand to a client.
 
 <img src="docs/images/result.jpg" alt="An orthophoto made by the app, overlaid on the satellite map" width="900">
 
 <img src="docs/images/model.jpg" alt="The textured 3D model of the same site in the built-in viewer" width="900">
+
+<img src="docs/images/pointcloud.jpg" alt="The coloured point cloud of the same site in the built-in viewer" width="900">
 
 <sub>Example results made in the app from 25 of the [Aukerman Park](https://github.com/OpenDroneMap/odm_data_aukerman)
 sample photos (CC0) at Fast quality: 15 minutes on a laptop with built-in graphics.</sub>
@@ -126,7 +131,10 @@ SHA-256 fingerprint:
 
 Results are saved under `Documents\Drone Mapping\Processing`, one folder per job, with the
 engine's full log. Photos imported from a USB device go to `Documents\Drone Mapping\Imports`.
-Splats train on the graphics card. Built-in graphics work, but an NVIDIA or AMD card with 8 GB
+**Getting good models:** large plain roofs (sheet metal, concrete) need straight-down (-90°)
+photos with high overlap; tilted shots alone leave holes there, which the 3D mesh then sags
+across. Use a grid at -90° for roofs and ground, plus orbits or tilted passes for walls. Splats
+train on the graphics card. Built-in graphics work, but an NVIDIA or AMD card with 8 GB
 or more is several times faster. Splats from orbit flights come out much sharper than from
 mapping grids.
 
@@ -147,7 +155,7 @@ npm run desktop:build  # MSI → app/src-tauri/target/release/bundle/msi/
 | Flight planning | Pure TypeScript in `app/src/domain`: grids, orbits, multi-part missions, stats |
 | Mission formats | `app/src/export`: DJI WPML KMZ (Pilot 2 and DJI Fly dialects), Litchi CSV, KMZ reader |
 | Desktop app | Tauri 2 (Rust): controller transfer, photo import, processing packs, job runner |
-| 3D viewer | three.js (textured meshes) and [Spark](https://sparkjs.dev) (Gaussian splats) |
+| 3D viewer | three.js (textured meshes, point clouds) and [Spark](https://sparkjs.dev) (Gaussian splats) |
 | Controller transfer | `tools/send-to-dji-fly.ps1`: Windows Shell over MTP, with backup and restore |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, and how missions reach each
