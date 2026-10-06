@@ -48,3 +48,41 @@ export async function rcSend(kmzBase64: string, mission: string, whatIf = false)
     })) ?? { ok: false, error: 'No controller connection from here.' }
   )
 }
+
+/* ---------- Optional processing packs (desktop app only) ---------- */
+
+export interface EnginePack {
+  id: string
+  title: string
+  summary: string
+  version: string
+  installedVersion: string | null
+  installed: boolean
+  upToDate: boolean
+  downloadBytes: number
+  installedBytes: number
+  path: string
+}
+export interface EngineStatus {
+  ok: boolean
+  error?: string
+  windows: boolean
+  freeBytes: number | null
+  packs: EnginePack[]
+}
+export interface EngineProgress {
+  pack: string
+  step: 'download' | 'install' | 'done' | 'error'
+  done: number
+  total: number
+  message: string
+}
+
+export const engineStatus = () => invoke<EngineStatus>('engine_status')
+export const engineInstall = (id: string) => invoke<BridgeResult>('engine_install', { id })
+export const engineRemove = (id: string) => invoke<BridgeResult>('engine_remove', { id })
+export const engineCancel = () => invoke<void>('engine_cancel')
+export async function onEngineProgress(cb: (p: EngineProgress) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<EngineProgress>('engine-progress', (e) => cb(e.payload))
+}

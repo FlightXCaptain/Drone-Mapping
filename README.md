@@ -61,3 +61,23 @@ npm run desktop:build    # build → app/src-tauri/target/release/bundle/msi/Dro
 
 Building needs Rust (rustup) and downloads the WiX toolset on first build. The installer adds a
 Start-menu entry and installs Microsoft Edge WebView2 if it's missing (it's built into Windows 11).
+
+Each new MSI installs straight over the previous version: the WiX upgrade code is pinned in
+`tauri.conf.json` (don't change it), and every build removes any older copy before installing.
+Bump the version in `tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json` together.
+
+### Processing tools (optional, desktop only)
+
+The **Processing** button (top right) installs the tools that turn flight photos into maps, 3D
+models and Gaussian splats. They aren't in the MSI, which stays about 4 MB; each pack downloads
+on request from the engine's official GitHub release, pinned to an exact version and SHA-256
+in `src-tauri/src/engines.rs`:
+
+| Pack | Engines | Download | On disk |
+|---|---|---|---|
+| Maps & 3D models | OpenDroneMap 3.6.2 (AGPL, run as a separate program) | 245 MB | ~1 GB |
+| Gaussian splats | COLMAP 4.2.1 (BSD) + Brush 0.3.0 (Apache-2.0) | 287 MB | ~550 MB |
+
+Packs install to `%LOCALAPPDATA%\com.flightxcaptain.dronemapping\engines\<pack>`, outside the
+program folder, so app updates and reinstalls keep them. **Remove** runs ODM's own uninstaller,
+then deletes the folder.
