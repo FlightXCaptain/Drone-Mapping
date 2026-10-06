@@ -27,6 +27,7 @@ pub fn run() {
       jobs::jobs_list,
       jobs::job_open,
       jobs::job_delete,
+      jobs::job_export,
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

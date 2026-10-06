@@ -141,6 +141,13 @@ export const jobStart = (kind: JobKind, name: string, photos: string[], quality:
 export const jobCancel = (id: string) => invoke<BridgeResult>('job_cancel', { id })
 export const jobsList = () => invoke<{ ok: boolean; root: string; jobs: Job[]; running: string | null }>('jobs_list')
 export const jobOpen = (id: string, what: 'folder' | 'model' | 'orthophoto' | 'splat') => invoke<BridgeResult>('job_open', { id, what })
+export const jobExport = (id: string, dest: string) =>
+  invoke<BridgeResult & { folder?: string; files?: number; bytes?: number }>('job_export', { id, dest })
+export async function pickSaveFolder(): Promise<string | null> {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const r = await open({ directory: true, title: 'Save the result files to…' })
+  return typeof r === 'string' ? r : null
+}
 export const jobDelete = (id: string) => invoke<BridgeResult>('job_delete', { id })
 export async function onJobProgress(cb: (p: JobProgress) => void): Promise<() => void> {
   const { listen } = await import('@tauri-apps/api/event')

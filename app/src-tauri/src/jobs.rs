@@ -677,6 +677,58 @@ pub fn job_open(app: AppHandle, id: String, what: String) -> Value {
     }
 }
 
+/// Copy a result's deliverables into `<dest>\<job name>`: the files a client wants, without
+/// the engine's working folders. A model's OBJ comes with its material and texture files.
+#[tauri::command]
+pub async fn job_export(app: AppHandle, id: String, dest: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let fail = |e: String| json!({ "ok": false, "error": e });
+        let dir = match job_dir(&app, &id) {
+            Ok(d) => d,
+            Err(e) => return fail(e),
+        };
+        let job = read_job(&dir).unwrap_or_default();
+        let name = job["name"].as_str().map(slug).unwrap_or_else(|| id.clone());
+        let out = PathBuf::from(&dest).join(&name);
+        if let Err(e) = fs::create_dir_all(&out) {
+            return fail(format!("Couldn't create {}: {e}", out.display()));
+        }
+        match export_files(&dir, &job, &out) {
+            Ok((files, bytes)) => json!({ "ok": true, "folder": out.to_string_lossy(), "files": files, "bytes": bytes }),
+            Err(e) => fail(e),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn export_files(dir: &Path, job: &Value, out: &Path) -> Result<(usize, u64), String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for key in ["orthophoto", "model", "pointCloud", "dem", "splat"] {
+        let Some(p) = job["outputs"][key].as_str().map(PathBuf::from).filter(|p| p.starts_with(dir) && p.is_file()) else { continue };
+        if key == "model" && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("obj")) {
+            // The OBJ's .mtl and every texture it names sit beside it, sharing its name.
+            let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            if let Ok(it) = fs::read_dir(p.parent().unwrap()) {
+                files.extend(it.flatten().map(|e| e.path()).filter(|f| {
+                    let n = f.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    n.starts_with(&stem) && !n.ends_with(".conf")
+                }));
+            }
+        } else {
+            files.push(p);
+        }
+    }
+    if files.is_empty() {
+        return Err("This result has no files to save.".into());
+    }
+    let mut bytes = 0u64;
+    for f in &files {
+        bytes += fs::copy(f, out.join(f.file_name().unwrap())).map_err(|e| format!("Couldn't copy {}: {e}", f.display()))?;
+    }
+    Ok((files.len(), bytes))
+}
+
 #[tauri::command]
 pub fn job_delete(app: AppHandle, state: State<'_, JobState>, id: String) -> Value {
     if state.running.lock().unwrap().as_ref().is_some_and(|r| r.id == id) {
@@ -721,6 +773,32 @@ mod tests {
         assert_eq!(fraction("Processed file [12/48]"), Some(0.25));
         assert_eq!(fraction("no counter"), None);
         assert_eq!(brush_step("Training step 1500/5000"), Some(1500.0));
+    }
+
+    #[test]
+    fn export_copies_deliverables_only() {
+        let root = std::env::temp_dir().join(format!("dm-export-{}", std::process::id()));
+        let dir = root.join("job");
+        let tex = dir.join("odm_texturing");
+        fs::create_dir_all(&tex).unwrap();
+        for f in ["m_geo.obj", "m_geo.mtl", "m_geo_material0000_map_Kd.png", "m_geo.conf", "other.obj"] {
+            fs::write(tex.join(f), b"x").unwrap();
+        }
+        fs::write(dir.join("ortho.tif"), b"tif").unwrap();
+        let job = json!({ "outputs": {
+            "model": tex.join("m_geo.obj").to_string_lossy(),
+            "orthophoto": dir.join("ortho.tif").to_string_lossy(),
+            "pointCloud": null,
+            // Never copied from outside the job folder.
+            "splat": std::env::temp_dir().join("elsewhere.ply").to_string_lossy(),
+        }});
+        let out = root.join("out");
+        fs::create_dir_all(&out).unwrap();
+        assert_eq!(export_files(&dir, &job, &out).unwrap().0, 4);
+        let mut got: Vec<_> = fs::read_dir(&out).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        got.sort();
+        assert_eq!(got, ["m_geo.mtl", "m_geo.obj", "m_geo_material0000_map_Kd.png", "ortho.tif"]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -8,6 +8,8 @@ import {
   hardwareInfo,
   jobCancel,
   jobDelete,
+  jobExport,
+  pickSaveFolder,
   jobOpen,
   jobStart,
   jobsList,
@@ -79,6 +81,7 @@ export function ProcessingDialog({
   const [installProgress, setInstallProgress] = useState<EngineProgress | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<{ id: string; text: string } | null>(null)
   const [hw, setHw] = useState<Hardware | null>(null)
   const [flightIdx, setFlightIdx] = useState(0)
   const [importing, setImporting] = useState<{ id: string; done: number; total: number } | null>(null)
@@ -186,6 +189,21 @@ export function ProcessingDialog({
   const open = async (job: Job, what: 'folder' | 'model' | 'orthophoto' | 'splat') => {
     const r = await jobOpen(job.id, what)
     if (!r.ok) setError(r.error ?? 'Could not open it.')
+  }
+
+  /** Copy the deliverables (map, model, point cloud, splat) wherever the user wants them. */
+  const save = async (job: Job) => {
+    setError(null)
+    setSaved(null)
+    const dest = await pickSaveFolder()
+    if (!dest) return
+    setSaved({ id: job.id, text: 'Saving…' })
+    const r = await jobExport(job.id, dest)
+    if (!r.ok) {
+      setSaved(null)
+      return setError(r.error ?? 'Could not save the files.')
+    }
+    setSaved({ id: job.id, text: `Saved ${r.files} files (${gb(r.bytes ?? 0)}) to ${r.folder}` })
   }
 
   const install = async (id: string, action: 'install' | 'remove') => {
@@ -386,6 +404,11 @@ export function ProcessingDialog({
                           {j.status === 'failed' ? j.error : j.status === 'cancelled' ? 'Cancelled' : 'Stopped when the app closed'}
                         </span>
                       )}
+                      {j.status === 'done' && (
+                        <button className="btn" onClick={() => save(j)} title="Copy the finished files somewhere else, e.g. to send to a client">
+                          Save files…
+                        </button>
+                      )}
                       <button className="btn" onClick={() => open(j, 'folder')}>
                         Folder
                       </button>
@@ -405,6 +428,7 @@ export function ProcessingDialog({
                       </button>
                     </div>
                   )}
+                  {saved?.id === j.id && <p className="fine job-saved">{saved.text}</p>}
                 </li>
               )
             })}
