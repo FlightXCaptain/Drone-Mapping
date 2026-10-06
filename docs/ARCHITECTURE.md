@@ -37,9 +37,9 @@ Built-in profiles live in `app/src/domain/drones.ts`. Clients can copy or add th
 ## Architecture
 
 ```
-app/  (React + Vite + TypeScript; runs in the browser as a PWA and inside the Tauri desktop app)
+app/  (React + Vite + TypeScript UI, packaged as a Windows desktop app with Tauri)
  └─ src/
-    ├─ domain/          Pure TS, no UI. Unit tested. Portable to a future mobile app.
+    ├─ domain/          Pure TS, no UI. Unit tested.
     │   ├─ photogrammetry.ts   GSD ⇄ altitude, footprint, overlap → spacing
     │   ├─ geo.ts              local metric frame, distance, bearing
     │   ├─ planners/grid.ts    lawnmower (+crosshatch) over any polygon
@@ -102,10 +102,8 @@ Photos → results, on the user's own PC, inside the desktop app. No server or D
 
 1. **Planner MVP** (this commit): draw area or point, grid or orbit, live stats, KMZ/CSV export,
    custom drones.
-2. **Field polish**: PWA offline tiles, terrain follow, KML import, mission library, split by
+2. **Field polish**: offline map tiles, terrain follow, KML import, mission library, split by
    battery, airspace overlay.
-3. **Android companion (DJI MSDK v5)**: runs on the RC Pro / RC Plus / phone, pulls missions from
-   the web app by QR code or link, uploads them straight to the aircraft and shows live telemetry.
-   This removes the DJI Fly file-swap step.
-4. **Processing**: upload photos → ODM / splat jobs → in-browser 3D viewers.
-5. **Multi-tenant**: organisations, client portals, shared drone fleets, auth.
+3. **Processing** (done): photos → OpenDroneMap / COLMAP + Brush jobs on the PC → map overlay and
+   built-in 3D viewer.
+4. **Multi-tenant**: organisations, client portals, shared drone fleets, auth.
