@@ -49,6 +49,12 @@ describe('hardware fit', () => {
     expect(mapFit(laptop, 41, 'fast').message).toMatch(/for 41 photos/)
   })
 
+  it('map only is much quicker than map + 3D model', () => {
+    const full = mapFit(laptop, 58, 'fast').minutes!
+    const mapOnly = mapFit(laptop, 58, 'fast', false).minutes!
+    expect(mapOnly).toBeLessThan(full / 2.5)
+  })
+
   it('says durations plainly', () => {
     expect(duration(1)).toBe('a minute or two')
     expect(duration(22)).toBe('about 20 min')

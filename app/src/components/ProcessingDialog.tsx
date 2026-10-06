@@ -30,7 +30,7 @@ import {
   type Quality,
 } from '../bridge'
 import { coverage } from '../domain/coverage'
-import { groupFlights } from '../domain/flights'
+import { flightKey, groupFlights } from '../domain/flights'
 import { mapFit, splatFit, type Fit, type Hardware } from '../domain/hardware'
 import { useProcessingView } from '../processing'
 import type { LngLat } from '../domain/types'
@@ -72,10 +72,9 @@ export function ProcessingDialog({
   const view = useProcessingView()
   const [engines, setEngines] = useState<EngineStatus | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
-  const { scan, flightIdx, quality } = view.form
+  const { scans, quality, model3d } = view.form
   const name = view.form.name ?? missionName
-  const setScan = (scan: PhotoScan | null) => view.setForm({ scan })
-  const setFlightIdx = (flightIdx: number) => view.setForm({ flightIdx })
+  const setScans = (scans: { scan: PhotoScan; picked: string[] }[]) => view.setForm({ scans })
   const setName = (name: string) => view.setForm({ name })
   const setQuality = (quality: Quality) => view.setForm({ quality })
   const [scanning, setScanning] = useState(false)
@@ -118,15 +117,22 @@ export function ProcessingDialog({
 
   const installed = (pack: string) => !!engines?.packs.find((p) => p.id === pack)?.installed
   const running = jobs.find((j) => j.status === 'running')
-  // A card holds many flights: work on one at a time (newest first).
-  const flights = useMemo(() => groupFlights(scan?.photos ?? []), [scan])
-  const photos = useMemo(() => flights[flightIdx]?.photos ?? [], [flights, flightIdx])
+  // A job can take several folders (e.g. one per ring or level), and a card holds many flights:
+  // the job gets every ticked flight from every folder, each photo once.
+  const folders = useMemo(() => scans.map((s) => ({ ...s, flights: groupFlights(s.scan.photos) })), [scans])
+  const photos = useMemo(() => {
+    const seen = new Set<string>()
+    return folders
+      .flatMap((f) => f.flights.filter((fl) => f.picked.includes(flightKey(fl))).flatMap((fl) => fl.photos))
+      .filter((p) => !seen.has(p.path) && !!seen.add(p.path))
+  }, [folders])
+  const noGps = scans.reduce((n, s) => n + s.scan.noGps.length, 0)
   const cover = useMemo(
     () => (photos.length && planned.length ? coverage(planned, photos.map((p) => [p.lng, p.lat] as LngLat)) : null),
     [photos, planned],
   )
   useEffect(() => {
-    if (!scan) return
+    if (!scans.length) return view.setPhotos(null)
     view.setPhotos({ taken: photos.map((p) => [p.lng, p.lat] as LngLat), missing: cover?.missing ?? [] })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photos, cover])
@@ -140,8 +146,11 @@ export function ProcessingDialog({
     try {
       const r = await photosScan(folder)
       if (!r.ok) throw new Error(r.error)
-      setFlightIdx(0)
-      setScan(r)
+      // Adding the same folder again refreshes it rather than doubling it up.
+      const rest = view.form.scans.filter((s) => s.scan.folder.toLowerCase() !== r.folder.toLowerCase())
+      const newest = groupFlights(r.photos)[0]
+      setScans([...rest, { scan: r, picked: newest ? [flightKey(newest)] : [] }])
+      setTyped('')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -177,7 +186,7 @@ export function ProcessingDialog({
   const start = async (kind: JobKind) => {
     if (!photos.length) return
     setError(null)
-    const r = await jobStart(kind, name.trim() || 'Photos', photos.map((p) => p.path), quality)
+    const r = await jobStart(kind, name.trim() || 'Photos', photos.map((p) => p.path), quality, model3d)
     if (!r.ok) setError(r.error ?? 'Could not start.')
     void refresh()
   }
@@ -255,7 +264,7 @@ export function ProcessingDialog({
         )}
         <div className="dialog-actions">
           <button className="btn" onClick={() => choose()} disabled={scanning}>
-            {scanning ? 'Reading photos…' : scan ? 'Choose another folder' : 'Choose photo folder'}
+            {scanning ? 'Reading photos…' : scans.length ? 'Add another folder' : 'Choose photo folder'}
           </button>
           <input
             className="input proc-path"
@@ -266,25 +275,54 @@ export function ProcessingDialog({
             onKeyDown={(e) => e.key === 'Enter' && typed.trim() && choose(typed.trim().replace(/^"|"$/g, ''))}
           />
         </div>
-        {scan && <span className="fine proc-folder" title={scan.folder}>{scan.folder}</span>}
-        {flights.length > 1 && (
-          <label className="stack">
-            Flight
-            <select className="input" value={flightIdx} onChange={(e) => setFlightIdx(Number(e.target.value))}>
-              {flights.map((f, i) => (
-                <option key={f.start} value={i}>
-                  {f.start ? new Date(f.start).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Undated'} ·{' '}
-                  {f.photos.length} photos
-                </option>
-              ))}
-            </select>
-          </label>
+        {folders.length > 0 && (
+          <ul className="folders" aria-label="Photo folders in this job">
+            {folders.map((f, i) => (
+              <li key={f.scan.folder}>
+                <div className="folder-head">
+                  <span className="proc-folder" title={f.scan.folder}>
+                    {f.scan.folder}
+                  </span>
+                  <span className="fine">{f.scan.photos.length} photos</span>
+                  <button
+                    className="icon-btn small"
+                    aria-label={`Remove ${f.scan.folder}`}
+                    onClick={() => setScans(scans.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </div>
+                {f.flights.length > 1 && (
+                  <div className="flight-picks" role="group" aria-label="Flights in this folder">
+                    {f.flights.map((fl) => {
+                      const key = flightKey(fl)
+                      const on = f.picked.includes(key)
+                      return (
+                        <label key={key} className="flight-pick">
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() =>
+                              setScans(scans.map((s, j) => (j !== i ? s : { ...s, picked: on ? s.picked.filter((k) => k !== key) : [...s.picked, key] })))
+                            }
+                          />
+                          {fl.start ? new Date(fl.start).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Undated'} ·{' '}
+                          {fl.photos.length} photos
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
-        {scan && (
+        {scans.length > 0 && (
           <ul className="proc-facts">
             <li>
               <b>{photos.length}</b> photos with GPS (green on the map)
-              {scan.noGps.length > 0 && `; ${scan.noGps.length} without GPS will be skipped`}
+              {folders.length > 1 && ` from ${folders.length} folders`}
+              {noGps > 0 && `; ${noGps} without GPS will be skipped`}
             </li>
             {cover && (
               <li className={cover.missing.length ? 'warn-text' : 'ok-text'}>
@@ -310,10 +348,22 @@ export function ProcessingDialog({
             </button>
           ))}
         </div>
+        <div className="choice" role="radiogroup" aria-label="Photogrammetry output">
+          {(
+            [
+              [true, 'Map + 3D model', 'Orthophoto, textured 3D model and point cloud'],
+              [false, 'Map only (fastest)', 'Just the orthophoto: several times quicker, no 3D model'],
+            ] as const
+          ).map(([v, label, title]) => (
+            <button key={label} role="radio" aria-checked={model3d === v} className={model3d === v ? 'on' : ''} title={title} onClick={() => view.setForm({ model3d: v })}>
+              {label}
+            </button>
+          ))}
+        </div>
         {hw && (
           <ul className="fit" aria-label="How well this PC will cope">
             {(['map', 'splat'] as JobKind[]).map((k) => {
-              const fit = k === 'map' ? mapFit(hw, photos.length, quality) : splatFit(hw, photos.length, quality)
+              const fit = k === 'map' ? mapFit(hw, photos.length, quality, model3d) : splatFit(hw, photos.length, quality)
               return (
                 <li key={k}>
                   <span className={`fit-badge fit-${fit.rating}`}>{RATING[fit.rating]}</span>
@@ -338,7 +388,7 @@ export function ProcessingDialog({
             </button>
           ))}
         </div>
-        {!scan && <p className="fine">Choose the photos first.</p>}
+        {!scans.length && <p className="fine">Choose the photos first. Add several folders for one job, e.g. one per ring or level.</p>}
         {running && (
           <p className="fine">
             One job runs at a time.{' '}
@@ -361,7 +411,7 @@ export function ProcessingDialog({
                   <div className="job-head">
                     <b>{j.name}</b>
                     <span className="fine">
-                      {KIND[j.kind].label} · {j.photos} photos · {when(j.startedAt)}
+                      {j.kind === 'map' && j.model3d === false ? 'Map only' : KIND[j.kind].label} · {j.photos} photos · {when(j.startedAt)}
                       {j.status === 'done' && ` · took ${took(j.seconds)}`}
                     </span>
                   </div>
@@ -387,6 +437,11 @@ export function ProcessingDialog({
                           {j.outputs?.model && (
                             <button className="btn" onClick={() => onView({ title: j.name, kind: 'mesh', path: j.outputs!.model! })}>
                               View 3D model
+                            </button>
+                          )}
+                          {j.outputs?.pointCloudPly && (
+                            <button className="btn" onClick={() => onView({ title: `${j.name}: point cloud`, kind: 'points', path: j.outputs!.pointCloudPly! })}>
+                              View point cloud
                             </button>
                           )}
                         </>

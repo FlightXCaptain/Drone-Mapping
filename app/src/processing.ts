@@ -19,7 +19,14 @@ interface ProcessingView {
   /** Sources the user dismissed or already used, so the prompt doesn't nag. */
   seen: string[]
   /** What the processing window was working on, kept while it's minimised or closed. */
-  form: { scan: PhotoScan | null; flightIdx: number; name: string | null; quality: Quality }
+  form: {
+    /** Every folder added to this job (e.g. one per ring or level), with the flights ticked in each. */
+    scans: { scan: PhotoScan; picked: string[] }[]
+    name: string | null
+    quality: Quality
+    /** Photogrammetry: also build the textured 3D model (most of the processing time). */
+    model3d: boolean
+  }
   setForm: (f: Partial<ProcessingView['form']>) => void
   setSources: (s: PhotoSource[]) => void
   markSeen: (id: string) => void
@@ -34,7 +41,7 @@ export const useProcessingView = create<ProcessingView>()((set) => ({
   setOverlay: (overlay) => set({ overlay }),
   job: null,
   finished: null,
-  form: { scan: null, flightIdx: 0, name: null, quality: 'standard' },
+  form: { scans: [], name: null, quality: 'standard', model3d: true },
   setForm: (f) => set((s) => ({ form: { ...s.form, ...f } })),
   sources: [],
   seen: [],
