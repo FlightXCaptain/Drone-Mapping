@@ -9,6 +9,7 @@ turn the photos into maps, 3D models and Gaussian splats, all from one app.**
 
 [![CI](https://github.com/FlightXCaptain/Drone-Mapping/actions/workflows/ci.yml/badge.svg)](https://github.com/FlightXCaptain/Drone-Mapping/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/FlightXCaptain/Drone-Mapping?label=Windows%20installer)](https://github.com/FlightXCaptain/Drone-Mapping/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 <img src="docs/images/plan.jpg" alt="A mapping grid over the Supreme Court Gardens and an orbit of the Bell Tower, planned at Elizabeth Quay, Perth, with live flight stats" width="900">
 
@@ -21,7 +22,7 @@ turn the photos into maps, 3D models and Gaussian splats, all from one app.**
 | | |
 |---|---|
 | **1. Plan** | Draw an area to map or drop a subject to orbit, right on satellite imagery. The route, photo positions, flight time and battery count update as you drag. |
-| **2. Send** | One click puts the mission on a DJI RC 2 / RC over USB, with backups and verification. Or export for DJI Pilot 2 or Litchi, or hand it to a phone with a QR code. |
+| **2. Send** | One click puts the mission on a DJI RC 2 / RC over USB, with backups and verification. Or export a file for DJI Pilot 2 or Litchi. |
 | **3. Check** | Read the mission back off the controller and see every waypoint on the map, with coordinates, heights and a diff against your plan, before you fly. |
 | **4. Process** | Plug in the controller or SD card and the app finds the photos, checks every planned shot was taken, then makes a photogrammetry model (orthophoto map + textured 3D) or a Gaussian splat on your PC, and shows it on the map or in 3D. |
 
@@ -33,8 +34,7 @@ and run it. Each new version installs straight over the previous one.
 > The installer isn't code-signed yet, so Windows SmartScreen may ask you to confirm
 > (*More info → Run anyway*).
 
-The planner also runs in any browser (phone, tablet, laptop) and works offline once loaded; see
-[Develop](#develop). Sending over USB and processing photos need the Windows app.
+Runs on Windows 10 and 11.
 
 ## Planning
 
@@ -58,14 +58,13 @@ The planner also runs in any browser (phone, tablet, laptop) and works offline o
 
 ## Sending to the drone
 
-<img src="docs/images/send.jpg" alt="The Send to drone dialog: one-click send to a DJI RC 2, KMZ/CSV downloads and a QR hand-off" width="900">
+<img src="docs/images/send.jpg" alt="The Send to drone dialog: one-click send to a DJI RC 2 over USB, plus KMZ and CSV downloads" width="900">
 
 | Your drone runs | How the mission gets there |
 |---|---|
 | **DJI Fly** (Mini 4/5 Pro, Air 3/3S, Mavic 3/4) | **Send to DJI RC 2**: the desktop app writes the mission into a placeholder over USB. Or download a KMZ. |
 | **DJI Pilot 2** (Enterprise / Matrice) | Download a WPML KMZ and use *Import Route*. |
 | **Litchi** (older drones without waypoints) | Download a Litchi Mission Hub CSV. |
-| **A phone or tablet in the field** | Scan the QR code. The plan opens in the app on the phone, even offline. |
 
 **Controller safety.** The USB transfer only ever writes one file
 (`waypoint/<mission>/<mission>.kmz`). It validates the mission first, refuses to change anything
@@ -131,22 +130,12 @@ Splats train on the graphics card. Built-in graphics work, but an NVIDIA or AMD 
 or more is several times faster. Splats from orbit flights come out much sharper than from
 mapping grids.
 
-## On a phone
-
-<img src="docs/images/phone.jpg" alt="The planner on a phone" width="300" align="right">
-
-The planner is a progressive web app: open it on a phone or tablet, add it to the home screen,
-and it works without signal. Plans move between devices as a link or QR code; nothing is uploaded
-anywhere.
-
-<br clear="right">
-
 ## Develop
 
 ```bash
 cd app
 npm install
-npm run dev            # planner in the browser: http://localhost:5173
+npm run dev            # UI in a browser for development: http://localhost:5173
 npm test               # planners, exporters, coverage, flights and hardware rules (vitest)
 npm run desktop        # the Windows app in development (needs Rust)
 npm run desktop:build  # MSI → app/src-tauri/target/release/bundle/msi/
@@ -185,3 +174,7 @@ OpenStreetMap contributors.
 
 Not affiliated with or endorsed by DJI. DJI, DJI Fly and DJI Pilot are trademarks of SZ DJI
 Technology Co., Ltd.
+
+## License
+
+[MIT](LICENSE). The processing engines the app downloads keep their own licences (see Credits).
