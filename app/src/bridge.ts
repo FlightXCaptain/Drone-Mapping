@@ -112,7 +112,7 @@ export interface Job {
   kind: JobKind
   quality: Quality
   photos: number
-  status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted' | 'elsewhere'
   stage: string
   startedAt: number
   seconds?: number

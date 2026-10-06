@@ -223,7 +223,7 @@ pub async fn hardware_info() -> Result<Value, String> {
 
 /// Run a tool, logging every line to log.txt and handing it to `on_line`. Stops (and kills the
 /// whole process tree) when `cancel` is set.
-fn run_logged(mut cmd: Command, log: &mut File, running: &Running, mut on_line: impl FnMut(&str)) -> Result<(), String> {
+fn run_logged(mut cmd: Command, log: &mut File, running: &Running, mut on_line: impl FnMut(&str), mut on_tick: impl FnMut()) -> Result<(), String> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     // ODM's run.bat finds its helper scripts in the current folder; this would stop that.
     cmd.env_remove("NoDefaultCurrentDirectoryInExePath");
@@ -260,7 +260,7 @@ fn run_logged(mut cmd: Command, log: &mut File, running: &Running, mut on_line: 
                 let _ = writeln!(log, "{line}");
                 on_line(&line);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => on_tick(),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -371,7 +371,7 @@ pub fn job_start(app: AppHandle, state: State<'_, JobState>, kind: String, name:
     }
     let job = json!({
         "id": id, "name": name, "kind": kind, "quality": quality, "photos": photos.len(),
-        "status": "running", "stage": "Starting", "startedAt": unix_now(),
+        "status": "running", "stage": "Starting", "startedAt": unix_now(), "pid": std::process::id(),
     });
     write_job(&dir, &job);
     let running = Running { id: id.clone(), name: name.clone(), kind: kind.clone(), cancel: Arc::default(), pid: Arc::default() };
@@ -461,14 +461,20 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
             .args(p.odm);
         let mut stage = "Starting";
         let mut at = 0.03;
-        run_logged(cmd, &mut log, running, |line| {
-            if let Some((frac, label)) = odm_stage(line) {
-                stage = label;
-                at = 0.03 + 0.97 * frac;
-                save_stage(job, stage);
-            }
-            emit(stage, at, line);
-        })?;
+        run_logged(
+            cmd,
+            &mut log,
+            running,
+            |line| {
+                if let Some((frac, label)) = odm_stage(line) {
+                    stage = label;
+                    at = 0.03 + 0.97 * frac;
+                    save_stage(job, stage);
+                }
+                emit(stage, at, line);
+            },
+            || {},
+        )?;
         let ortho = dir.join("odm_orthophoto").join("odm_orthophoto.tif");
         if !ortho.is_file() {
             return Err("OpenDroneMap finished but made no map. The photos may not overlap enough; see log.txt.".into());
@@ -501,7 +507,11 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
         .args(["--quality", p.colmap_quality]);
     let mut stage = "Finding features";
     let mut at: f64 = 0.03;
-    run_logged(cmd, &mut log, running, |line| {
+    run_logged(
+        cmd,
+        &mut log,
+        running,
+        |line| {
         let (label, from, to) = if line.contains("Feature extraction") || line.contains("Processed file") {
             ("Finding features", 0.03, 0.15)
         } else if line.contains("matching") || line.contains("Matching") {
@@ -520,7 +530,9 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
             at = at.max(from + (to - from) * f);
         }
         emit(stage, at, line);
-    })?;
+        },
+        || {},
+    )?;
     if !dir.join("sparse").join("0").join("images.bin").is_file() {
         return Err("COLMAP couldn't work out where the photos were taken. They may not overlap enough; see log.txt.".into());
     }
@@ -528,36 +540,66 @@ fn run_job(app: &AppHandle, running: &Running, dir: &Path, pack: &Path, kind: &s
     let brush = pack.join("brush").join("brush_app.exe");
     let out = dir.join("splat");
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let steps = p.brush_steps.to_string();
+    // Brush prints nothing while it trains, so progress comes from checkpoints: it saves
+    // export_<step>.ply every 5% of the run, and the newest one tells us how far it is.
+    let steps = p.brush_steps;
+    let every = (steps / 20).max(100);
     let mut cmd = Command::new(&brush);
     cmd.current_dir(&out)
         .arg(dir)
-        .args(["--total-steps", &steps, "--export-every", &steps, "--max-resolution", &p.brush_resolution.to_string()])
+        .args(["--total-steps", &steps.to_string(), "--export-every", &every.to_string(), "--max-resolution", &p.brush_resolution.to_string()])
         .arg("--export-path")
         .arg(&out)
-        .args(["--export-name", "splat.ply"]);
-    let total = p.brush_steps as f64;
-    let mut at = 0.45;
+        .args(["--export-name", "export_{iter}.ply"]);
     save_stage(job, "Training the splat");
-    run_logged(cmd, &mut log, running, |line| {
-        if let Some(step) = brush_step(line) {
-            at = 0.45 + 0.55 * (step / total).clamp(0.0, 1.0);
-        }
-        emit("Training the splat", at, line);
-    })?;
-    let ply = first_existing(&[out.join("splat.ply")]).or_else(|| newest_ply(&out));
-    let Some(ply) = ply else {
+    emit("Training the splat", 0.45, "");
+    let mut last = Instant::now();
+    let done_steps = std::cell::Cell::new(0u32);
+    run_logged(
+        cmd,
+        &mut log,
+        running,
+        |line| emit("Training the splat", 0.45 + 0.55 * f64::from(done_steps.get()) / f64::from(steps), line),
+        || {
+            if last.elapsed() < Duration::from_secs(2) {
+                return;
+            }
+            last = Instant::now();
+            if let Some((step, _)) = latest_checkpoint(&out)
+                && step > done_steps.get()
+            {
+                done_steps.set(step);
+                emit("Training the splat", 0.45 + 0.55 * (f64::from(step) / f64::from(steps)).min(1.0), &format!("Step {step} of {steps}"));
+            }
+        },
+    )?;
+    let Some((_, last)) = latest_checkpoint(&out) else {
         return Err("Brush finished but saved no splat; see log.txt.".into());
     };
-    job["outputs"] = json!({ "splat": ply });
+    let ply = out.join("splat.ply");
+    fs::rename(last, &ply).map_err(|e| e.to_string())?;
+    job["outputs"] = json!({ "splat": ply.to_string_lossy() });
     Ok(())
 }
 
-fn brush_step(line: &str) -> Option<f64> {
-    let lower = line.to_ascii_lowercase();
-    let i = lower.find("step")?;
-    let digits: String = lower[i + 4..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+/// The newest Brush checkpoint (export_<step>.ply); older ones are deleted, since each can be
+/// hundreds of MB.
+fn latest_checkpoint(out: &Path) -> Option<(u32, PathBuf)> {
+    // Brush pads small steps ("export_0250.ply"), so keep each file's real name.
+    let mut found: Vec<(u32, PathBuf)> = fs::read_dir(out)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let step = e.file_name().to_str()?.strip_prefix("export_")?.strip_suffix(".ply")?.parse().ok()?;
+            Some((step, e.path()))
+        })
+        .collect();
+    found.sort_unstable_by_key(|f| f.0);
+    let newest = found.pop()?;
+    for (_, old) in found {
+        let _ = fs::remove_file(old);
+    }
+    Some(newest)
 }
 
 /// ODM's `--tiles` output: TMS tiles of the orthophoto, at `<job>\orthophoto_tiles`.
@@ -568,15 +610,6 @@ fn tiles_dir(dir: &Path) -> Option<String> {
 
 fn first_existing(paths: &[PathBuf]) -> Option<String> {
     paths.iter().find(|p| p.is_file()).map(|p| p.to_string_lossy().to_string())
-}
-
-fn newest_ply(dir: &Path) -> Option<String> {
-    fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "ply"))
-        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-        .map(|e| e.path().to_string_lossy().to_string())
 }
 
 fn chrono_stamp() -> String {
@@ -622,9 +655,11 @@ pub fn jobs_list(app: AppHandle, state: State<'_, JobState>) -> Value {
         .unwrap_or_default()
         .into_iter()
         .map(|(path, mut j)| {
-            // A job left "running" by an app that closed mid-way.
+            // A job left "running" by an app that closed mid-way, or one another open copy of
+            // the app is running (no progress here, but it mustn't be deleted under it).
             if j["status"] == "running" && running.as_deref() != j["id"].as_str() {
-                j["status"] = json!("interrupted");
+                let elsewhere = j["pid"].as_u64().is_some_and(|pid| app_alive(pid as u32));
+                j["status"] = json!(if elsewhere { "elsewhere" } else { "interrupted" });
             }
             if j["kind"] == "map" && j["status"] == "done" && j["outputs"]["tiles"].is_null() {
                 j["outputs"]["tiles"] = json!(tiles_dir(&path));
@@ -729,10 +764,30 @@ fn export_files(dir: &Path, job: &Value, out: &Path) -> Result<(usize, u64), Str
     Ok((files.len(), bytes))
 }
 
+/// Is a Drone Mapping process with this id still running? (Checked by name, as ids get reused.)
+fn app_alive(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains("drone-mapping"))
+        .unwrap_or(false)
+}
+
 #[tauri::command]
 pub fn job_delete(app: AppHandle, state: State<'_, JobState>, id: String) -> Value {
     if state.running.lock().unwrap().as_ref().is_some_and(|r| r.id == id) {
         return json!({ "ok": false, "error": "Cancel the job before deleting it." });
+    }
+    if let Ok(dir) = job_dir(&app, &id) {
+        let job = read_job(&dir).unwrap_or_default();
+        if job["status"] == "running" && job["pid"].as_u64().is_some_and(|pid| app_alive(pid as u32)) {
+            return json!({ "ok": false, "error": "Another open Drone Mapping window is still running this job." });
+        }
     }
     match job_dir(&app, &id).and_then(|d| fs::remove_dir_all(&d).map_err(|e| format!("Couldn't delete it: {e}"))) {
         Ok(()) => json!({ "ok": true }),
@@ -772,7 +827,15 @@ mod tests {
     fn counters() {
         assert_eq!(fraction("Processed file [12/48]"), Some(0.25));
         assert_eq!(fraction("no counter"), None);
-        assert_eq!(brush_step("Training step 1500/5000"), Some(1500.0));
+        let out = std::env::temp_dir().join(format!("dm-ckpt-{}", std::process::id()));
+        fs::create_dir_all(&out).unwrap();
+        for name in ["export_0250.ply", "export_0500.ply", "export_1000.ply"] {
+            fs::write(out.join(name), b"x").unwrap();
+        }
+        assert_eq!(latest_checkpoint(&out).map(|c| c.0), Some(1000));
+        assert!(!out.join("export_0250.ply").exists(), "older checkpoints are cleared, padded names too");
+        assert!(!out.join("export_0500.ply").exists());
+        let _ = fs::remove_dir_all(&out);
     }
 
     #[test]

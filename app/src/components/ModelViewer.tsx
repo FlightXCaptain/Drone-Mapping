@@ -45,15 +45,33 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
 
       try {
         if (model.kind === 'splat') {
-          const { SplatMesh } = await import('@sparkjsdev/spark')
+          const { SparkRenderer, SplatMesh } = await import('@sparkjsdev/spark')
+          // Spark draws every splat in the scene through one SparkRenderer.
+          scene.add(new SparkRenderer({ renderer }))
           const splat = new SplatMesh({ url })
           await splat.initialized
           // COLMAP's camera frame is y-down; turn it the right way up.
           splat.quaternion.set(1, 0, 0, 0)
+          splat.updateMatrixWorld(true)
           object = splat
           scene.add(splat)
-          const box = splat.getBoundingBox(true).applyMatrix4(splat.matrixWorld)
-          frame(box)
+          // Frame the core of the scene: stray background splats would push the camera far out.
+          const xs: number[] = [], ys: number[] = [], zs: number[] = []
+          let i = 0
+          splat.forEachSplat((_n, c) => {
+            if (i++ % 7 === 0) {
+              const w = c.clone().applyMatrix4(splat.matrixWorld)
+              xs.push(w.x)
+              ys.push(w.y)
+              zs.push(w.z)
+            }
+          })
+          const pct = (v: number[], q: number) => v.sort((a, b) => a - b)[Math.floor(q * (v.length - 1))] ?? 0
+          frame(
+            xs.length > 50
+              ? new THREE.Box3(new THREE.Vector3(pct(xs, 0.05), pct(ys, 0.05), pct(zs, 0.05)), new THREE.Vector3(pct(xs, 0.95), pct(ys, 0.95), pct(zs, 0.95)))
+              : splat.getBoundingBox(true).applyMatrix4(splat.matrixWorld),
+          )
         } else {
           if (/\.glb$/i.test(model.path)) {
             const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')

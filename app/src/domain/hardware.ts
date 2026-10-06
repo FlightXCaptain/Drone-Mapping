@@ -77,11 +77,13 @@ export function mapFit(hw: Hardware, photos: number, quality: Quality = 'standar
 const BRUSH_STEPS: Record<Quality, number> = { fast: 5000, standard: 15000, high: 30000 }
 const COLMAP_MIN_PER_PHOTO: Record<Quality, number> = { fast: 0.15, standard: 0.3, high: 0.6 }
 
+/* Measured: Intel built-in graphics ran ~20 steps/s on a small test splat; full-size ones
+ * slow down as the splat grows, so plan on less. Dedicated cards run several times faster. */
 function stepsPerSecond(gpu: { name: string; vramGb: number }): number {
-  if (isIntegrated(gpu)) return 2
-  if (gpu.vramGb >= 11.5) return 30
-  if (gpu.vramGb >= 7.5) return 20
-  return 10
+  if (isIntegrated(gpu)) return 6
+  if (gpu.vramGb >= 11.5) return 50
+  if (gpu.vramGb >= 7.5) return 35
+  return 18
 }
 
 export function splatFit(hw: Hardware, photos = 0, quality: Quality = 'standard'): Fit {
@@ -93,10 +95,10 @@ export function splatFit(hw: Hardware, photos = 0, quality: Quality = 'standard'
   const time = minutes != null ? ` ${cap(duration(minutes))} for ${photos} photos.` : ` Training alone takes ${duration(train)}.`
 
   if (isIntegrated(gpu)) {
-    const rating: Rating = train > 180 ? 'no' : 'slow'
+    const rating: Rating = train > 240 ? 'no' : train > 30 || (minutes ?? 0) > 60 ? 'slow' : 'ok'
     return {
       rating,
-      message: `${gpu.name} is built-in graphics.${time} An NVIDIA or AMD graphics card (8 GB+) is 10× faster or more${quality === 'fast' ? '' : '; Fast helps'}.`,
+      message: `${gpu.name} is built-in graphics.${time} An NVIDIA or AMD graphics card (8 GB+) is several times faster${quality === 'fast' ? '' : '; Fast helps'}.`,
       minutes,
     }
   }
