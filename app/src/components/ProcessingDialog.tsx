@@ -403,7 +403,13 @@ export function ProcessingDialog({
                       )}
                       {j.status !== 'done' && (
                         <span className="error job-error">
-                          {j.status === 'failed' ? j.error : j.status === 'cancelled' ? 'Cancelled' : 'Stopped when the app closed'}
+                          {j.status === 'failed'
+                            ? j.error
+                            : j.status === 'cancelled'
+                              ? 'Cancelled'
+                              : j.status === 'elsewhere'
+                                ? 'Running in another Drone Mapping window'
+                                : 'Stopped when the app closed'}
                         </span>
                       )}
                       {j.status === 'done' && (
@@ -415,6 +421,7 @@ export function ProcessingDialog({
                         Folder
                       </button>
                       <span className="spacer" />
+                      {j.status !== 'elsewhere' && (
                       <button
                         className="btn btn-danger"
                         onClick={async () => {
@@ -428,6 +435,7 @@ export function ProcessingDialog({
                       >
                         {confirmDelete === j.id ? 'Really delete?' : 'Delete'}
                       </button>
+                      )}
                     </div>
                   )}
                   {saved?.id === j.id && <p className="fine job-saved">{saved.text}</p>}

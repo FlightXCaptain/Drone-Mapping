@@ -24,8 +24,8 @@ describe('hardware fit', () => {
   })
 
   it('rates splats by graphics card and quality', () => {
-    expect(splatFit(laptop, 40, 'fast').rating).toBe('slow')
-    expect(splatFit(laptop, 40, 'high').rating).toBe('no') // hours of training on built-in graphics
+    expect(splatFit(laptop, 40, 'fast').rating).toBe('ok') // ~14 min on built-in graphics
+    expect(splatFit(laptop, 40, 'high').rating).toBe('slow') // about 1.5 hours
     expect(splatFit(gamer, 40, 'standard').rating).toBe('good')
     expect(splatFit({ ...gamer, gpus: [{ name: 'NVIDIA GeForce GTX 1650', vramGb: 4 }] }, 40, 'high').rating).toBe('slow')
     expect(splatFit({ ...gamer, gpus: [] }).rating).toBe('no')
