@@ -83,6 +83,29 @@
   box-shadow: var(--shadow);
 }
 
+.tools-btn {
+  position: absolute;
+  top: 62px;
+  right: 56px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: 14px;
+}
+.tools-btn:hover {
+  color: var(--ink);
+}
+
 /* ---------- Settings card ---------- */
 .card {
   background: var(--panel);
@@ -728,6 +751,61 @@
 }
 .btn-danger {
   color: var(--end);
+}
+
+.packs {
+  display: grid;
+  gap: 10px;
+}
+.pack {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel-solid);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pack-on {
+  border-color: var(--act);
+}
+.pack-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.pack-head h3 {
+  margin: 0;
+}
+.pack-state {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.pack-on .pack-state {
+  color: var(--act);
+}
+.pack-sum {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.pack-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.pack-progress progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  accent-color: var(--act);
+}
+.btn:disabled {
+  opacity: 0.5;
 }
 
 /* ---------- MapLibre control tweaks ---------- */

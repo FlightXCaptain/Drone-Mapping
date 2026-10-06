@@ -1,6 +1,6 @@
 [package]
 name = "drone-mapping"
-version = "0.1.4"
+version = "0.1.5"
 description = "Plan DJI drone photo missions and send them to the controller"
 authors = ["FlightXCaptain"]
 license = ""
@@ -24,3 +24,7 @@ log = "0.4"
 tauri = { version = "2.12.1", features = [] }
 tauri-plugin-log = "2"
 base64 = "0.22"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "native-tls", "system-proxy"] }
+sha2 = "0.11.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+fs4 = "1.1.0"

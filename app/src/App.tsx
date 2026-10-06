@@ -8,6 +8,8 @@ import { DroneEditor } from './components/DroneEditor'
 import { PlaceSearch } from './components/PlaceSearch'
 import { SharedPlanPrompt } from './components/SharedPlanPrompt'
 import { InspectPanel } from './components/InspectPanel'
+import { ProcessingDialog } from './components/ProcessingDialog'
+import { isDesktop } from './bridge'
 import { currentParts, useCurrentDrone, usePlanner } from './store'
 import { planAll } from './plan'
 import type { LngLat } from './domain/types'
@@ -18,6 +20,7 @@ export default function App() {
   const s = usePlanner()
   const [basemap, setBasemap] = useState<Basemap>('satellite')
   const [flyTo, setFlyTo] = useState<LngLat | null>(null)
+  const [processingOpen, setProcessingOpen] = useState(false)
 
   // Re-plan every part on every edit. Planning is pure and takes a few ms, which is what lets
   // dragging a corner or the route feel live.
@@ -54,6 +57,15 @@ export default function App() {
         ))}
       </div>
 
+      {isDesktop() && (
+        <button className="tools-btn" onClick={() => setProcessingOpen(true)} title="Install tools that turn flight photos into maps, 3D models and splats">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+            <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+          Processing
+        </button>
+      )}
+
       <div className="bottom">
         <Toolbar />
         <StatsBar stats={stats} />
@@ -62,6 +74,7 @@ export default function App() {
       {s.sendOpen && mission && <SendDialog mission={mission} />}
       <InspectPanel plan={mission} onFocus={(c) => setFlyTo([...c])} />
       <SharedPlanPrompt onOpened={(c) => c && setFlyTo([...c])} />
+      {processingOpen && <ProcessingDialog onClose={() => setProcessingOpen(false)} />}
       {s.droneEditor && <DroneEditor initial={s.droneEditor === 'new' ? null : s.droneEditor} />}
     </div>
   )
