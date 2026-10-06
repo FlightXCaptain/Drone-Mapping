@@ -37,7 +37,7 @@ Built-in profiles live in `app/src/domain/drones.ts`. Clients can copy or add th
 ## Architecture
 
 ```
-app/  (React + Vite + TypeScript, runs entirely in the browser, installable as a PWA later)
+app/  (React + Vite + TypeScript; runs in the browser as a PWA and inside the Tauri desktop app)
  └─ src/
     ├─ domain/          Pure TS, no UI. Unit tested. Portable to a future mobile app.
     │   ├─ photogrammetry.ts   GSD ⇄ altitude, footprint, overlap → spacing
@@ -78,19 +78,25 @@ Planned next:
 - **Obstacle and airspace overlays**: CASA/FAA no-fly zones, height limits.
 - **Import KML/KMZ/GeoJSON boundaries** from a client.
 
-## Processing pipeline (phase 2)
+## Processing pipeline
 
-Photos → model, using the Docker hosts already on the LAN:
+Photos → results, on the user's own PC, inside the desktop app. No server or Docker.
 
-- **Photogrammetry**: [NodeODM / WebODM](https://github.com/OpenDroneMap/WebODM) container on
-  DockerBox. The app uploads an image set (or points ODM at an SMB share) and polls task
-  status. Outputs: orthophoto, DSM/DTM, textured mesh, point cloud.
-- **Gaussian splats**: COLMAP for camera poses (or reuse ODM's SfM), then
-  [gsplat / nerfstudio `splatfacto`](https://github.com/nerfstudio-project/gsplat). This needs
-  an NVIDIA GPU, so it runs on DockerBox2 (Docker Desktop with WSL2 GPU). Output `.ply` / `.spz`,
-  viewed in-browser with a WebGL splat viewer.
-- A small job API (Node or Python) queues jobs, stores results, and serves
-  viewer links back to the app.
+- **Engines are optional packs** (`app/src-tauri/src/engines.rs`), downloaded on request from
+  each project's GitHub release and pinned to an exact version, size and SHA-256. They install to
+  `%LOCALAPPDATA%\com.flightxcaptain.dronemapping\engines`, so app upgrades keep them.
+- **Jobs** (`app/src-tauri/src/jobs.rs`) copy the chosen photos into
+  `Documents\Drone Mapping\Processing\<job>\images`, run the engine as a child process, parse its
+  log into stages and an overall percentage, and record outputs in `job.json`. One job runs
+  at a time; quitting the app stops it.
+  - **Map & 3D model:** OpenDroneMap (`run.bat … --tiles`). Outputs: orthophoto GeoTIFF plus
+    TMS tiles (shown on the map through Tauri's asset protocol), textured OBJ, LAZ point cloud.
+  - **Gaussian splat:** COLMAP `automatic_reconstructor` (sparse only) for camera poses, then
+    Brush trains on the GPU via wgpu (any vendor) and exports a PLY.
+- **Coverage check** (`app/src/domain/coverage.ts`): each planned shot counts as taken when a
+  photo's EXIF GPS position lies within 10 m of it.
+- **Hardware guide** (`app/src/domain/hardware.ts`): rates maps by memory and photo count, and
+  splats by the best graphics card's dedicated memory (built-in graphics rate "slow").
 
 ## Phase plan
 

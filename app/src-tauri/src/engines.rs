@@ -36,6 +36,8 @@ struct Download {
     kind: Kind,
     /// Sub-folder of the pack it installs into.
     dir: &'static str,
+    /// Size once installed, for the install progress bar.
+    installed_bytes: u64,
 }
 
 struct Pack {
@@ -65,6 +67,7 @@ const PACKS: &[Pack] = &[
             bytes: 244_864_104,
             kind: Kind::InnoSetup,
             dir: "odm",
+            installed_bytes: 1_006_000_000, // measured for 3.6.2
         }],
         installed_bytes: 1_100 * MB, // 960 MB measured for 3.6.2
         checks: &["odm/run.bat", "odm/run.py"],
@@ -81,6 +84,7 @@ const PACKS: &[Pack] = &[
                 bytes: 127_731_595,
                 kind: Kind::Zip,
                 dir: "colmap",
+                installed_bytes: 355_245_654,
             },
             Download {
                 url: "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-x86_64-pc-windows-msvc.zip",
@@ -88,6 +92,7 @@ const PACKS: &[Pack] = &[
                 bytes: 158_791_348,
                 kind: Kind::Zip,
                 dir: "brush",
+                installed_bytes: 158_790_940,
             },
         ],
         installed_bytes: 550 * MB,
@@ -132,6 +137,13 @@ fn installed_version(dir: &Path, pack: &Pack) -> Option<String> {
         return None;
     }
     marker["version"].as_str().map(str::to_string)
+}
+
+/// The folder of an installed, complete pack, for running its tools.
+pub fn installed_pack(app: &AppHandle, id: &str) -> Option<PathBuf> {
+    let pack = find(id).ok()?;
+    let dir = root(app).ok()?.join(pack.id);
+    installed_version(&dir, pack).map(|_| dir)
 }
 
 #[tauri::command]
@@ -251,12 +263,14 @@ fn install(app: &AppHandle, cancel: &AtomicBool, id: &str) -> Result<(), String>
     }
 
     let result = (|| {
-        for (i, (d, file)) in pack.downloads.iter().zip(&files).enumerate() {
-            emit("install", i as u64, pack.downloads.len() as u64, format!("Installing {}", d.dir));
+        for (d, file) in pack.downloads.iter().zip(&files) {
+            let message = format!("Installing {}", d.dir);
+            let progress = |done, total| emit("install", done, total, message.clone());
+            progress(0, 1);
             let target = dir.join(d.dir);
             match d.kind {
-                Kind::Zip => unzip(file, &target)?,
-                Kind::InnoSetup => run_inno(file, &target)?,
+                Kind::Zip => unzip(file, &target, progress)?,
+                Kind::InnoSetup => run_inno(file, &target, d.installed_bytes, progress)?,
             }
         }
         if let Some(missing) = pack.checks.iter().find(|c| !dir.join(c).is_file()) {
@@ -325,8 +339,10 @@ fn fetch(d: &Download, file: &Path, cancel: &AtomicBool, progress: impl Fn(u64))
     fs::rename(&part, file).map_err(|e| e.to_string())
 }
 
-fn unzip(file: &Path, target: &Path) -> Result<(), String> {
+fn unzip(file: &Path, target: &Path, progress: impl Fn(u64, u64)) -> Result<(), String> {
     let mut zip = zip::ZipArchive::new(File::open(file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let total = (0..zip.len()).filter_map(|i| zip.by_index_raw(i).ok().map(|e| e.size())).sum::<u64>().max(1);
+    let (mut done, mut last) = (0u64, Instant::now());
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         // enclosed_name refuses absolute paths and "..", so an entry can't escape the folder.
@@ -340,18 +356,33 @@ fn unzip(file: &Path, target: &Path) -> Result<(), String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let mut out = File::create(&path).map_err(|e| format!("Couldn't write {}: {e}", path.display()))?;
-        std::io::copy(&mut entry, &mut out).map_err(|e| format!("Couldn't extract {}: {e}", path.display()))?;
+        done += std::io::copy(&mut entry, &mut out).map_err(|e| format!("Couldn't extract {}: {e}", path.display()))?;
+        if last.elapsed() > Duration::from_millis(200) {
+            progress(done, total);
+            last = Instant::now();
+        }
     }
+    progress(total, total);
     Ok(())
 }
 
-fn run_inno(installer: &Path, target: &Path) -> Result<(), String> {
+/// The installer reports nothing while it runs, so progress is how much of the expected size
+/// has landed in the folder so far.
+fn run_inno(installer: &Path, target: &Path, expected: u64, progress: impl Fn(u64, u64)) -> Result<(), String> {
     let mut cmd = Command::new(installer);
     cmd.args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/CURRENTUSER", "/SP-"])
         .arg(format!("/DIR={}", target.display()));
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let status = cmd.status().map_err(|e| format!("Couldn't start the installer: {e}. If Windows blocked it, allow it and try again."))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Couldn't start the installer: {e}. If Windows blocked it, allow it and try again."))?;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break status;
+        }
+        progress(dir_size(target).min(expected * 99 / 100), expected);
+        std::thread::sleep(Duration::from_secs(1));
+    };
+    progress(expected, expected);
     if !status.success() {
         return Err(format!("The installer stopped (code {}).", status.code().unwrap_or(-1)));
     }
@@ -381,6 +412,18 @@ fn remove_pack(dir: &Path, pack: &Pack) -> Result<(), String> {
         fs::remove_dir_all(dir).map_err(|e| format!("Couldn't remove {}: {e}. Close anything using it and try again.", dir.display()))?;
     }
     Ok(())
+}
+
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 fn unix_now() -> u64 {
@@ -419,7 +462,7 @@ mod tests {
             w.finish().unwrap();
         }
         let target = tmp.join("out");
-        unzip(&zip_path, &target).unwrap();
+        unzip(&zip_path, &target, |_, _| {}).unwrap();
         assert_eq!(fs::read_to_string(target.join("bin/ok.txt")).unwrap(), "ok");
         assert!(!tmp.join("escape.txt").exists());
         let _ = fs::remove_dir_all(&tmp);

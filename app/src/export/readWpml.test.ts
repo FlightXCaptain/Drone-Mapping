@@ -58,12 +58,14 @@ describe('reading a mission back', () => {
     expect(c.differences[1]).toMatch(/km from where your plan starts/)
   })
 
-  // The native DJI Fly file from the user's RC 2, when present on this machine.
-  const NATIVE = 'C:/Users/lachlan.bunter/Desktop/BACAD3AC-ECEC-470A-B69B-5145AB8FC239/BACAD3AC-ECEC-470A-B69B-5145AB8FC239.kmz'
-  it.skipIf(!existsSync(NATIVE))('reads a mission DJI Fly wrote itself', async () => {
+  // A mission DJI Fly saved itself (copied off a controller), when DJI_FLY_KMZ points at one.
+  const NATIVE = process.env.DJI_FLY_KMZ ?? ''
+  it.skipIf(!NATIVE || !existsSync(NATIVE))('reads a mission DJI Fly wrote itself', async () => {
     const read = await readKmz(readFileSync(NATIVE).buffer as ArrayBuffer)
-    expect(read.waypoints.length).toBe(4)
-    expect(read.waypoints[0].position[0]).toBeCloseTo(115.90215, 4)
-    expect(read.waypoints[0].heightM).toBe(0.4)
+    expect(read.waypoints.length).toBeGreaterThan(0)
+    for (const w of read.waypoints) {
+      expect(Math.abs(w.position[0])).toBeLessThanOrEqual(180)
+      expect(Math.abs(w.position[1])).toBeLessThanOrEqual(90)
+    }
   })
 })

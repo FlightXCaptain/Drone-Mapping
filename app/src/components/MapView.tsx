@@ -8,6 +8,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawRectangleMode } from 'terra-draw'
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter'
 import { partLabel, usePlanner, type Part } from '../store'
+import { useProcessingView } from '../processing'
 import { bearingDeg, centroid, distanceM, localFrame } from '../domain/geo'
 import type { LngLat, Mission } from '../domain/types'
 
@@ -154,7 +155,7 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right')
 
     map.on('load', () => {
-      for (const id of ['others', 'area', 'orbit-disc', 'orbit-ring', 'mission-path', 'active-path', 'mission-photos', 'inspect']) {
+      for (const id of ['others', 'area', 'orbit-disc', 'orbit-ring', 'mission-path', 'active-path', 'mission-photos', 'inspect', 'photos-taken', 'photos-missing']) {
         map.addSource(id, { type: 'geojson', data: EMPTY })
       }
       // Other parts of the mission: faint, and not draggable (tap their number chip to edit).
@@ -178,6 +179,19 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
           'circle-stroke-color': '#000',
           'circle-stroke-width': 0.5,
         },
+      })
+      // Photos from a flight (green) and planned shots with no photo (red), for the coverage check.
+      map.addLayer({
+        id: 'photos-taken',
+        type: 'circle',
+        source: 'photos-taken',
+        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2, 19, 6], 'circle-color': '#22c55e', 'circle-stroke-color': '#000', 'circle-stroke-width': 1 },
+      })
+      map.addLayer({
+        id: 'photos-missing',
+        type: 'circle',
+        source: 'photos-missing',
+        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3, 19, 8], 'circle-color': '#ef4444', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
       })
       // Mission read back from the controller/file: cyan, drawn over everything for checking.
       map.addLayer({ id: 'inspect-casing', type: 'line', source: 'inspect', filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#000', 'line-width': 6, 'line-opacity': 0.5 } })
@@ -554,6 +568,37 @@ export function MapView({ mission, activeMission, parts, basemap, flyTo }: MapVi
       { padding: { top: 80, bottom: 160, left: 380, right: 460 }, maxZoom: 19, duration: 600 },
     )
   }, [inspected, ready])
+
+  // ---- Processing: photo coverage and finished maps -------------------------------------------
+  const photos = useProcessingView((s) => s.photos)
+  const overlay = useProcessingView((s) => s.overlay)
+  useEffect(() => {
+    if (!ready) return
+    const map = mapRef.current!
+    const points = (pts: LngLat[] = []) => fc(pts.map((c) => feat({ type: 'Point', coordinates: c })))
+    ;(map.getSource('photos-taken') as GeoJSONSource).setData(points(photos?.taken))
+    ;(map.getSource('photos-missing') as GeoJSONSource).setData(points(photos?.missing))
+  }, [photos, ready])
+
+  useEffect(() => {
+    if (!ready || !overlay) return
+    const map = mapRef.current!
+    // Above the imagery, under the plan, so the route stays visible on the new map.
+    map.addSource('result', { type: 'raster', tiles: [overlay.tiles], scheme: 'tms', tileSize: 256, bounds: overlay.bounds, maxzoom: 23 })
+    map.addLayer({ id: 'result', type: 'raster', source: 'result' }, 'others-fill')
+    const [w, s, e, n] = overlay.bounds
+    map.fitBounds(
+      [
+        [w, s],
+        [e, n],
+      ],
+      { padding: { top: 80, bottom: 160, left: 380, right: 120 }, maxZoom: 20, duration: 600 },
+    )
+    return () => {
+      if (map.getLayer('result')) map.removeLayer('result')
+      if (map.getSource('result')) map.removeSource('result')
+    }
+  }, [overlay, ready])
 
   // ---- Basemap & fly-to ------------------------------------------------------------------------
   useEffect(() => {

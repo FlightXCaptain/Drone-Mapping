@@ -86,3 +86,89 @@ export async function onEngineProgress(cb: (p: EngineProgress) => void): Promise
   const { listen } = await import('@tauri-apps/api/event')
   return listen<EngineProgress>('engine-progress', (e) => cb(e.payload))
 }
+
+/* ---------- Processing jobs (desktop app only) ---------- */
+
+export interface Photo {
+  path: string
+  name: string
+  lng: number
+  lat: number
+  alt: number | null
+  time: string | null
+}
+export interface PhotoScan {
+  ok: boolean
+  error?: string
+  folder: string
+  photos: Photo[]
+  noGps: string[]
+}
+export type JobKind = 'map' | 'splat'
+export type Quality = 'fast' | 'standard' | 'high'
+export interface Job {
+  id: string
+  name: string
+  kind: JobKind
+  quality: Quality
+  photos: number
+  status: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+  stage: string
+  startedAt: number
+  seconds?: number
+  error?: string
+  dir: string
+  bounds?: [number, number, number, number] | null
+  outputs?: { orthophoto?: string; tiles?: string | null; model?: string | null; splat?: string; pointCloud?: string | null }
+}
+export interface JobProgress {
+  id: string
+  name: string
+  kind: JobKind
+  stage: string
+  pct: number
+  line: string
+}
+
+export async function pickFolder(): Promise<string | null> {
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const r = await open({ directory: true, title: 'Choose the folder with the flight photos' })
+  return typeof r === 'string' ? r : null
+}
+export const photosScan = (folder: string) => invoke<PhotoScan>('photos_scan', { folder })
+export const jobStart = (kind: JobKind, name: string, photos: string[], quality: Quality) =>
+  invoke<BridgeResult & { id?: string }>('job_start', { kind, name, photos, quality })
+export const jobCancel = (id: string) => invoke<BridgeResult>('job_cancel', { id })
+export const jobsList = () => invoke<{ ok: boolean; root: string; jobs: Job[]; running: string | null }>('jobs_list')
+export const jobOpen = (id: string, what: 'folder' | 'model' | 'orthophoto' | 'splat') => invoke<BridgeResult>('job_open', { id, what })
+export const jobDelete = (id: string) => invoke<BridgeResult>('job_delete', { id })
+export async function onJobProgress(cb: (p: JobProgress) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<JobProgress>('job-progress', (e) => cb(e.payload))
+}
+/** A local tiles folder as a MapLibre tile URL template. */
+export async function tileUrl(dir: string): Promise<string> {
+  const { convertFileSrc } = await import('@tauri-apps/api/core')
+  return `${convertFileSrc(dir)}/{z}/{x}/{y}.png`
+}
+export interface PhotoSource {
+  id: string
+  kind: 'drive' | 'mtp'
+  label: string
+  photos: number
+  /** drive: the DCIM folder to read in place */
+  path?: string
+  /** mtp: which device folder to import */
+  device?: string
+  storage?: string
+  folder?: string
+}
+/** Cards, drives and DJI USB devices holding photos. `usb` also asks DJI USB devices (slower). */
+export const photoSources = (usb: boolean) => invoke<{ ok: boolean; sources: PhotoSource[] }>('photo_sources', { usb })
+export const photosImport = (s: PhotoSource) =>
+  invoke<BridgeResult & { folder?: string }>('photos_import', { device: s.device, storage: s.storage, folder: s.folder })
+export async function onImportProgress(cb: (p: { done: number; total: number }) => void): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<{ done: number; total: number }>('import-progress', (e) => cb(e.payload))
+}
+export const hardwareInfo = () => invoke<import('./domain/hardware').Hardware & { ok: boolean }>('hardware_info')
