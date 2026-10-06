@@ -10,7 +10,7 @@ turn the photos into maps, 3D models and Gaussian splats, all from one app.**
 [![CI](https://github.com/FlightXCaptain/Drone-Mapping/actions/workflows/ci.yml/badge.svg)](https://github.com/FlightXCaptain/Drone-Mapping/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/FlightXCaptain/Drone-Mapping?label=Windows%20installer)](https://github.com/FlightXCaptain/Drone-Mapping/releases/latest)
 
-<img src="docs/images/plan.png" alt="A mapping grid and an orbit planned over Elizabeth Quay, Perth, with live flight stats" width="900">
+<img src="docs/images/plan.jpg" alt="A mapping grid over the Supreme Court Gardens and an orbit of the Bell Tower, planned at Elizabeth Quay, Perth, with live flight stats" width="900">
 
 </div>
 
@@ -23,7 +23,7 @@ turn the photos into maps, 3D models and Gaussian splats, all from one app.**
 | **1. Plan** | Draw an area to map or drop a subject to orbit, right on satellite imagery. The route, photo positions, flight time and battery count update as you drag. |
 | **2. Send** | One click puts the mission on a DJI RC 2 / RC over USB, with backups and verification. Or export for DJI Pilot 2 or Litchi, or hand it to a phone with a QR code. |
 | **3. Check** | Read the mission back off the controller and see every waypoint on the map, with coordinates, heights and a diff against your plan, before you fly. |
-| **4. Process** | Point the app at the photos. It checks every planned shot was taken, then makes an orthophoto map, a textured 3D model or a Gaussian splat on your PC. |
+| **4. Process** | Plug in the controller or SD card and the app finds the photos, checks every planned shot was taken, then makes a photogrammetry model (orthophoto map + textured 3D) or a Gaussian splat on your PC, and shows it on the map or in 3D. |
 
 ## Download
 
@@ -38,7 +38,7 @@ The planner also runs in any browser (phone, tablet, laptop) and works offline o
 
 ## Planning
 
-<img src="docs/images/orbit.png" alt="Three stacked orbit rings around a tower, with the side profile showing each ring's height and camera angle" width="900">
+<img src="docs/images/orbit.jpg" alt="Three stacked orbit rings around a tower, with the side profile showing each ring's height and camera angle" width="900">
 
 - **Mapping grids** for orthophotos and elevation models. Set the detail you want (cm per pixel),
   and the app works out altitude, line spacing and photo interval from your drone's camera.
@@ -58,7 +58,7 @@ The planner also runs in any browser (phone, tablet, laptop) and works offline o
 
 ## Sending to the drone
 
-<img src="docs/images/send.png" alt="The Send to drone dialog: one-click send to a DJI RC 2, KMZ/CSV downloads and a QR hand-off" width="900">
+<img src="docs/images/send.jpg" alt="The Send to drone dialog: one-click send to a DJI RC 2, KMZ/CSV downloads and a QR hand-off" width="900">
 
 | Your drone runs | How the mission gets there |
 |---|---|
@@ -77,7 +77,7 @@ anything doesn't match. Every action is logged to `Documents\Drone Mapping\send-
 
 ## Check before you fly
 
-<img src="docs/images/check.png" alt="A mission read back from the controller, drawn on the map with numbered waypoints and a table of coordinates" width="900">
+<img src="docs/images/check.jpg" alt="A mission read back from the controller, drawn on the map with numbered waypoints and a table of coordinates" width="900">
 
 **Check what's on the controller** reads the mission back over USB (or from any KMZ file). It
 draws the route and numbered waypoints on the map, lists every waypoint's coordinates, height and
@@ -86,24 +86,35 @@ heights.
 
 ## Processing photos
 
-<img src="docs/images/process.png" alt="The Process photos dialog: photo coverage check, PC suitability ratings, and a running map job" width="900">
+<img src="docs/images/process.jpg" alt="The Process photos window: chosen photos, PC suitability ratings with time estimates, and finished results" width="900">
 
-1. Click **Process photos** in the bottom bar and choose the folder of photos (or paste a path,
-   e.g. the SD card's `DCIM\100MEDIA`).
-2. The app reads each photo's GPS position and checks it against the plan: taken shots show
-   green on the map, **missed shots red**. That's ideal for a reshoot before you leave site.
-3. It rates how well this PC will cope (memory and processor for maps, graphics card for
-   splats), then you pick **Fast / Standard / High** and make:
-   - **Map & 3D model** with [OpenDroneMap](https://opendronemap.org): a georeferenced
-     orthophoto shown right on the live map, a textured 3D mesh (OBJ) and a point cloud (LAZ).
-   - **Gaussian splat** with [COLMAP](https://colmap.github.io) and
-     [Brush](https://github.com/ArthurBrussee/brush): camera positions, then a trained splat
-     (PLY) that opens in Brush's viewer.
+1. **Get the photos in.** Plug in the DJI controller, the drone or a card reader. The app spots
+   DJI photos and offers them ("21 photos found on DJI RC 2 · SD card"). Or click **Process
+   photos** in the bottom bar and choose or paste a folder. Photos are grouped by flight, so a
+   card with several jobs on it isn't a problem.
+2. **Check coverage.** Each photo's GPS position is matched to the plan: taken shots show green
+   on the map, **missed shots red**. That's ideal for a reshoot before you leave site.
+3. **Make it.** The app rates how well this PC will cope and estimates the time (memory and
+   processor for photogrammetry, graphics card for splats). Pick **Fast / Standard / High** and
+   make a:
+   - **Photogrammetry model** with [OpenDroneMap](https://opendronemap.org): a georeferenced
+     orthophoto, a textured 3D model (GLB/OBJ) and a point cloud (LAZ).
+   - **Gaussian splat model** with [COLMAP](https://colmap.github.io) and
+     [Brush](https://github.com/ArthurBrussee/brush): camera positions, then a splat (PLY)
+     trained on the graphics card.
 
-<img src="docs/images/result.png" alt="An orthophoto made by the app, overlaid on the satellite map" width="900">
+   Minimise the window and keep planning: the **Process photos** button becomes the job's
+   progress bar.
+4. **Use it.** **Show on map** lays the orthophoto over the live satellite map. **View 3D model**
+   and **View splat** open the built-in 3D viewer. **Save files…** copies the deliverables
+   (GeoTIFF, model with textures, point cloud, splat) to any folder, ready to hand to a client.
 
-<sub>Example result made from the [Aukerman Park](https://github.com/OpenDroneMap/odm_data_aukerman)
-sample photos (CC0).</sub>
+<img src="docs/images/result.jpg" alt="An orthophoto made by the app, overlaid on the satellite map" width="900">
+
+<img src="docs/images/model.jpg" alt="The textured 3D model of the same site in the built-in viewer" width="900">
+
+<sub>Example results made in the app from 25 of the [Aukerman Park](https://github.com/OpenDroneMap/odm_data_aukerman)
+sample photos (CC0) at Fast quality: 15 minutes on a laptop with built-in graphics.</sub>
 
 The engines aren't bundled in the installer. In **Process photos → Processing tools**, each
 pack downloads once from the tool's official GitHub release, pinned to an exact version and
@@ -114,14 +125,15 @@ SHA-256 fingerprint:
 | Maps & 3D models | OpenDroneMap 3.6.2 | 245 MB | ~1 GB |
 | Gaussian splats | COLMAP 4.2.1 + Brush 0.3.0 | 287 MB | ~580 MB |
 
-Results are saved under `Documents\Drone Mapping\Processing`, one folder per job, with the full
-engine log. A 25-photo Fast map takes around 10–15 minutes on a typical laptop. Splats train on
-the graphics card, so an NVIDIA or AMD card with 8 GB or more is much faster than built-in
-graphics.
+Results are saved under `Documents\Drone Mapping\Processing`, one folder per job, with the
+engine's full log. Photos imported from a USB device go to `Documents\Drone Mapping\Imports`.
+Splats train on the graphics card. Built-in graphics work, but an NVIDIA or AMD card with 8 GB
+or more is several times faster. Splats from orbit flights come out much sharper than from
+mapping grids.
 
 ## On a phone
 
-<img src="docs/images/phone.png" alt="The planner on a phone" width="300" align="right">
+<img src="docs/images/phone.jpg" alt="The planner on a phone" width="300" align="right">
 
 The planner is a progressive web app: open it on a phone or tablet, add it to the home screen,
 and it works without signal. Plans move between devices as a link or QR code; nothing is uploaded
@@ -135,7 +147,7 @@ anywhere.
 cd app
 npm install
 npm run dev            # planner in the browser: http://localhost:5173
-npm test               # planners, exporters, coverage and hardware rules (vitest)
+npm test               # planners, exporters, coverage, flights and hardware rules (vitest)
 npm run desktop        # the Windows app in development (needs Rust)
 npm run desktop:build  # MSI → app/src-tauri/target/release/bundle/msi/
 ```
@@ -145,7 +157,8 @@ npm run desktop:build  # MSI → app/src-tauri/target/release/bundle/msi/
 | UI | React 19, TypeScript, Vite, MapLibre GL, Terra Draw, zustand |
 | Flight planning | Pure TypeScript in `app/src/domain`: grids, orbits, multi-part missions, stats |
 | Mission formats | `app/src/export`: DJI WPML KMZ (Pilot 2 and DJI Fly dialects), Litchi CSV, KMZ reader |
-| Desktop app | Tauri 2 (Rust): controller transfer, processing packs, job runner |
+| Desktop app | Tauri 2 (Rust): controller transfer, photo import, processing packs, job runner |
+| 3D viewer | three.js (textured meshes) and [Spark](https://sparkjs.dev) (Gaussian splats) |
 | Controller transfer | `tools/send-to-dji-fly.ps1`: Windows Shell over MTP, with backup and restore |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, and how missions reach each
@@ -165,8 +178,9 @@ obstacles, and the airspace rules where you fly. You are responsible for every f
 
 Built on [OpenDroneMap](https://github.com/OpenDroneMap/ODM) (AGPL-3.0, run as a separate
 program), [COLMAP](https://github.com/colmap/colmap) (BSD), [Brush](https://github.com/ArthurBrussee/brush)
-(Apache-2.0), [MapLibre GL JS](https://maplibre.org), [Terra Draw](https://terradraw.io) and
-[Tauri](https://tauri.app). Imagery © Esri, Maxar, Earthstar Geographics; map data ©
+(Apache-2.0), [Spark](https://github.com/sparkjsdev/spark) (MIT), [three.js](https://threejs.org),
+[MapLibre GL JS](https://maplibre.org), [Terra Draw](https://terradraw.io) and
+[Tauri](https://tauri.app). Sample photos: Aukerman Park, OpenDroneMap (CC0). Imagery © Esri, Maxar, Earthstar Geographics; map data ©
 OpenStreetMap contributors.
 
 Not affiliated with or endorsed by DJI. DJI, DJI Fly and DJI Pilot are trademarks of SZ DJI
