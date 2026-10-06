@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { LngLat } from './domain/types'
-import type { PhotoSource } from './bridge'
+import type { PhotoScan, PhotoSource, Quality } from './bridge'
 
 /** What the processing panel draws on the map (not persisted). */
 interface ProcessingView {
@@ -18,6 +18,9 @@ interface ProcessingView {
   sources: PhotoSource[]
   /** Sources the user dismissed or already used, so the prompt doesn't nag. */
   seen: string[]
+  /** What the processing window was working on, kept while it's minimised or closed. */
+  form: { scan: PhotoScan | null; flightIdx: number; name: string | null; quality: Quality }
+  setForm: (f: Partial<ProcessingView['form']>) => void
   setSources: (s: PhotoSource[]) => void
   markSeen: (id: string) => void
   setJob: (j: ProcessingView['job']) => void
@@ -31,6 +34,8 @@ export const useProcessingView = create<ProcessingView>()((set) => ({
   setOverlay: (overlay) => set({ overlay }),
   job: null,
   finished: null,
+  form: { scan: null, flightIdx: 0, name: null, quality: 'standard' },
+  setForm: (f) => set((s) => ({ form: { ...s.form, ...f } })),
   sources: [],
   seen: [],
   setSources: (sources) => set({ sources }),

@@ -15,6 +15,7 @@ export interface ViewerModel {
 export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: () => void }) {
   const host = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState('Loading…')
+  const resetView = useRef<() => void>(() => {})
 
   useEffect(() => {
     let disposed = false
@@ -54,8 +55,6 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
           const box = splat.getBoundingBox(true).applyMatrix4(splat.matrixWorld)
           frame(box)
         } else {
-          // OpenDroneMap models are z-up, in metres around the site's centre.
-          camera.up.set(0, 0, 1)
           if (/\.glb$/i.test(model.path)) {
             const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
             object = (await new GLTFLoader().loadAsync(url, onProgress)).scene
@@ -68,6 +67,11 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
             materials.preload()
             object = await new OBJLoader().setMaterials(materials).loadAsync(url, onProgress)
           }
+          // OpenDroneMap models are z-up; stand them up for three.js's y-up camera controls,
+          // and keep the camera above ground: a site is looked at from the air.
+          object.rotation.x = -Math.PI / 2
+          object.updateMatrixWorld(true)
+          controls.maxPolarAngle = Math.PI / 2 - 0.02
           scene.add(object)
           frame(new THREE.Box3().setFromObject(object))
         }
@@ -83,14 +87,16 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
         const centre = box.getCenter(new THREE.Vector3())
         const size = box.getSize(new THREE.Vector3()).length() || 10
         controls.target.copy(centre)
-        // Look in from the south-east and above, like a drone's view of the site.
-        const offset = model.kind === 'splat' ? new THREE.Vector3(0, -0.2, -1) : new THREE.Vector3(0.5, -0.8, 0.6)
+        // Look in from the south and above, like a drone's view of the site.
+        const offset = model.kind === 'splat' ? new THREE.Vector3(0, 0.3, 1) : new THREE.Vector3(0.35, 0.75, 0.8)
         camera.position.copy(centre).add(offset.normalize().multiplyScalar(size * 0.9))
         camera.near = size / 1000
         camera.far = size * 20
         camera.updateProjectionMatrix()
         controls.update()
+        controls.saveState()
       }
+      resetView.current = () => controls.reset()
 
       let raf = 0
       const loop = () => {
@@ -119,24 +125,30 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
     }
   }, [model])
 
+
+  // A native modal <dialog>: it stacks above the processing window (also modal) without
+  // closing it, so nothing chosen there is lost.
+  const dlg = useRef<HTMLDialogElement>(null)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const d = dlg.current!
+    if (!d.open) d.showModal()
+  }, [])
 
   return (
-    <div className="viewer" role="dialog" aria-label={`3D view: ${model.title}`}>
+    <dialog ref={dlg} className="viewer" aria-label={`3D view: ${model.title}`} onClose={onClose}>
       <div className="viewer-canvas" ref={host} />
       <header className="viewer-bar">
         <b>{model.title}</b>
-        <span className="fine">Drag to orbit · right-drag to pan · scroll to zoom</span>
+        <span className="fine">Drag to turn · right-drag or Shift-drag to move · scroll to zoom</span>
         <span className="spacer" />
+        <button className="btn" onClick={() => resetView.current()}>
+          Reset view
+        </button>
         <button className="btn" onClick={onClose}>
           Close
         </button>
       </header>
       {status && <p className="viewer-status">{status}</p>}
-    </div>
+    </dialog>
   )
 }
