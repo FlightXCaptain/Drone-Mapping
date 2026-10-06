@@ -1,132 +1,485 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Dialog } from './Dialog'
 import {
   engineCancel,
   engineInstall,
   engineRemove,
   engineStatus,
+  hardwareInfo,
+  jobCancel,
+  jobDelete,
+  jobOpen,
+  jobStart,
+  jobsList,
   onEngineProgress,
+  onImportProgress,
+  onJobProgress,
+  photosImport,
+  photosScan,
+  pickFolder,
+  tileUrl,
   type EngineProgress,
   type EngineStatus,
+  type Job,
+  type JobKind,
+  type JobProgress,
+  type PhotoScan,
+  type PhotoSource,
+  type Quality,
 } from '../bridge'
+import { coverage } from '../domain/coverage'
+import { groupFlights } from '../domain/flights'
+import { mapFit, splatFit, type Fit, type Hardware } from '../domain/hardware'
+import { useProcessingView } from '../processing'
+import type { LngLat } from '../domain/types'
+import type { ViewerModel } from './ModelViewer'
 
 const gb = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`)
+const KIND: Record<JobKind, { label: string; pack: string }> = {
+  map: { label: 'Photogrammetry model', pack: 'photogrammetry' },
+  splat: { label: 'Gaussian splat model', pack: 'splats' },
+}
+const QUALITY: [Quality, string, string][] = [
+  ['fast', 'Fast', 'Quick check on site: lower detail'],
+  ['standard', 'Standard', 'Good detail for most jobs'],
+  ['high', 'High', 'Most detail; can take several times longer'],
+]
+const RATING: Record<Fit['rating'], string> = { good: 'Good', ok: 'OK', slow: 'Slow', no: 'Not suitable' }
+const when = (s: number) => new Date(s * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+const took = (s?: number) => (s == null ? '' : s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`)
 
 /**
- * Optional processing packs for turning flight photos into maps, 3D models and splats.
- * Desktop app only: they're downloaded on request so the installer itself stays small.
+ * Turn the photos from a flight into results on this PC: check coverage against the plan,
+ * run OpenDroneMap or COLMAP + Brush, and show or open what they made. Desktop app only.
  */
-export function ProcessingDialog({ onClose }: { onClose: () => void }) {
-  const [status, setStatus] = useState<EngineStatus | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [progress, setProgress] = useState<EngineProgress | null>(null)
+export function ProcessingDialog({
+  onClose,
+  planned,
+  missionName,
+  startWith,
+  onView,
+}: {
+  onClose: () => void
+  /** Open a finished model or splat in the 3D viewer. */
+  onView: (m: ViewerModel) => void
+  planned: LngLat[]
+  missionName: string
+  /** A connected card or device to load straight away (from the "photos found" prompt). */
+  startWith?: PhotoSource | null
+}) {
+  const view = useProcessingView()
+  const [engines, setEngines] = useState<EngineStatus | null>(null)
+  const [jobs, setJobs] = useState<Job[]>([])
+  const [scan, setScan] = useState<PhotoScan | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [name, setName] = useState(missionName)
+  const [quality, setQuality] = useState<Quality>('standard')
+  const [progress, setProgress] = useState<Record<string, JobProgress>>({})
+  const [installing, setInstalling] = useState<string | null>(null)
+  const [installProgress, setInstallProgress] = useState<EngineProgress | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [hw, setHw] = useState<Hardware | null>(null)
+  const [flightIdx, setFlightIdx] = useState(0)
+  const [importing, setImporting] = useState<{ id: string; done: number; total: number } | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await engineStatus())
-    } catch (e) {
-      setError(String(e))
+      const [e, j] = await Promise.all([engineStatus(), jobsList()])
+      setEngines(e)
+      setJobs(j.jobs)
+    } catch (err) {
+      setError(String(err))
     }
   }, [])
 
   useEffect(() => {
-    refresh()
-    let stop: (() => void) | undefined
+    void refresh()
+    hardwareInfo().then(setHw, () => {})
+    const stops: (() => void)[] = []
     let gone = false
-    onEngineProgress(setProgress).then((u) => (gone ? u() : (stop = u)))
+    const keep = (u: () => void) => (gone ? u() : stops.push(u))
+    onEngineProgress(setInstallProgress).then(keep)
+    onImportProgress((p) => setImporting((i) => (i ? { ...i, ...p } : i))).then(keep)
+    onJobProgress((p) => {
+      setProgress((all) => ({ ...all, [p.id]: p }))
+      if (['done', 'failed', 'cancelled'].includes(p.stage)) void refresh()
+    }).then(keep)
     return () => {
       gone = true
-      stop?.()
+      stops.forEach((u) => u())
     }
   }, [refresh])
 
-  const run = async (id: string, action: 'install' | 'remove') => {
-    setBusy(id)
+  const installed = (pack: string) => !!engines?.packs.find((p) => p.id === pack)?.installed
+  const running = jobs.find((j) => j.status === 'running')
+  // A card holds many flights: work on one at a time (newest first).
+  const flights = useMemo(() => groupFlights(scan?.photos ?? []), [scan])
+  const photos = useMemo(() => flights[flightIdx]?.photos ?? [], [flights, flightIdx])
+  const cover = useMemo(
+    () => (photos.length && planned.length ? coverage(planned, photos.map((p) => [p.lng, p.lat] as LngLat)) : null),
+    [photos, planned],
+  )
+  useEffect(() => {
+    if (!scan) return
+    view.setPhotos({ taken: photos.map((p) => [p.lng, p.lat] as LngLat), missing: cover?.missing ?? [] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos, cover])
+
+  const [typed, setTyped] = useState('')
+  const choose = async (given?: string) => {
     setError(null)
-    setProgress(null)
+    const folder = given ?? (await pickFolder())
+    if (!folder) return
+    setScanning(true)
+    try {
+      const r = await photosScan(folder)
+      if (!r.ok) throw new Error(r.error)
+      setFlightIdx(0)
+      setScan(r)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+    setScanning(false)
+  }
+
+  /** A card or drive is read in place; a DJI USB device is imported to Documents first. */
+  const takeSource = async (s: PhotoSource) => {
+    view.markSeen(s.id)
+    if (s.kind === 'drive' && s.path) return choose(s.path)
+    setError(null)
+    setImporting({ id: s.id, done: 0, total: s.photos })
+    try {
+      const r = await photosImport(s)
+      if (!r.ok || !r.folder) throw new Error(r.error ?? 'The import failed.')
+      setImporting(null)
+      await choose(r.folder)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+    setImporting(null)
+  }
+
+  // Opened from the "photos found" prompt: start with that source, once.
+  const [started, setStarted] = useState(false)
+  useEffect(() => {
+    if (!startWith || started) return
+    setStarted(true)
+    void takeSource(startWith)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startWith, started])
+
+  const start = async (kind: JobKind) => {
+    if (!photos.length) return
+    setError(null)
+    const r = await jobStart(kind, name.trim() || 'Photos', photos.map((p) => p.path), quality)
+    if (!r.ok) setError(r.error ?? 'Could not start.')
+    void refresh()
+  }
+
+  const showMap = async (job: Job) => {
+    if (view.overlay?.id === job.id) return view.setOverlay(null)
+    if (!job.outputs?.tiles || !job.bounds) return setError('This result has no map tiles to show.')
+    view.setOverlay({ id: job.id, tiles: await tileUrl(job.outputs.tiles), bounds: job.bounds })
+  }
+
+  const open = async (job: Job, what: 'folder' | 'model' | 'orthophoto' | 'splat') => {
+    const r = await jobOpen(job.id, what)
+    if (!r.ok) setError(r.error ?? 'Could not open it.')
+  }
+
+  const install = async (id: string, action: 'install' | 'remove') => {
+    setInstalling(id)
+    setError(null)
+    setInstallProgress(null)
     try {
       const r = action === 'install' ? await engineInstall(id) : await engineRemove(id)
       if (!r.ok) setError(r.error ?? 'Something went wrong.')
-    } catch (e) {
-      setError(String(e))
+    } catch (err) {
+      setError(String(err))
     }
-    setBusy(null)
-    setProgress(null)
-    refresh()
+    setInstalling(null)
+    setInstallProgress(null)
+    void refresh()
   }
 
+  const allInstalled = !!engines?.packs.every((p) => p.installed && p.upToDate)
+
   return (
-    <Dialog title="Processing tools" onClose={onClose}>
+    <Dialog title="Process photos" onClose={onClose} onMinimise={onClose}>
       <p className="dialog-lede">
-        Turn the photos from a flight into maps, 3D models and Gaussian splats on this PC. These are free, open-source
-        tools. Install the ones you need; app updates keep them.
+        Turn the photos from a flight into a map, a 3D model or a Gaussian splat, here on this PC.
       </p>
-      {status && !status.windows && <p className="error">Processing tools need Windows.</p>}
-      <div className="packs">
-        {status?.packs.map((p) => {
-          const mine = busy === p.id
-          const pct = mine && progress && progress.total ? Math.min(100, (progress.done / progress.total) * 100) : null
-          const lowDisk = status.freeBytes != null && status.freeBytes < p.downloadBytes + p.installedBytes
-          return (
-            <section key={p.id} className={`pack ${p.installed ? 'pack-on' : ''}`}>
-              <div className="pack-head">
-                <h3>{p.title}</h3>
-                <span className="pack-state">
-                  {p.installed ? (p.upToDate ? 'Installed' : 'Update available') : 'Not installed'}
+
+      <section className="proc-step">
+        <h3>1. Your photos</h3>
+        {view.sources.length > 0 && (
+          <ul className="sources" aria-label="Connected cards and drones">
+            {view.sources.map((s) => (
+              <li key={s.id}>
+                <span>
+                  <b>{s.label}</b> · {s.photos.toLocaleString()} photos
                 </span>
-              </div>
-              <p className="pack-sum">{p.summary}</p>
-              {mine ? (
-                <div className="pack-progress">
-                  <progress max={100} value={pct ?? undefined} />
+                {importing?.id === s.id ? (
+                  <span className="source-import">
+                    <progress max={importing.total || 1} value={importing.done} /> {importing.done} of {importing.total}
+                  </span>
+                ) : (
+                  <button className="btn" disabled={!!importing || scanning} onClick={() => takeSource(s)}>
+                    {s.kind === 'mtp' ? 'Import' : 'Use'}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="dialog-actions">
+          <button className="btn" onClick={() => choose()} disabled={scanning}>
+            {scanning ? 'Reading photos…' : scan ? 'Choose another folder' : 'Choose photo folder'}
+          </button>
+          <input
+            className="input proc-path"
+            placeholder="or paste a folder path, e.g. E:\DCIM\100MEDIA"
+            aria-label="Photo folder path"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && typed.trim() && choose(typed.trim().replace(/^"|"$/g, ''))}
+          />
+        </div>
+        {scan && <span className="fine proc-folder" title={scan.folder}>{scan.folder}</span>}
+        {flights.length > 1 && (
+          <label className="stack">
+            Flight
+            <select className="input" value={flightIdx} onChange={(e) => setFlightIdx(Number(e.target.value))}>
+              {flights.map((f, i) => (
+                <option key={f.start} value={i}>
+                  {f.start ? new Date(f.start).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Undated'} ·{' '}
+                  {f.photos.length} photos
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {scan && (
+          <ul className="proc-facts">
+            <li>
+              <b>{photos.length}</b> photos with GPS (green on the map)
+              {scan.noGps.length > 0 && `; ${scan.noGps.length} without GPS will be skipped`}
+            </li>
+            {cover && (
+              <li className={cover.missing.length ? 'warn-text' : 'ok-text'}>
+                {cover.found} of {planned.length} planned shots taken
+                {cover.missing.length ? `: ${cover.missing.length} missing (red on the map)` : ': full coverage'}
+              </li>
+            )}
+            {cover && cover.unplanned > 0 && <li>{cover.unplanned} photos away from the current plan</li>}
+          </ul>
+        )}
+      </section>
+
+      <section className="proc-step">
+        <h3>2. Make</h3>
+        <label className="stack">
+          Name
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <div className="choice" role="radiogroup" aria-label="Quality">
+          {QUALITY.map(([q, label, title]) => (
+            <button key={q} role="radio" aria-checked={quality === q} className={quality === q ? 'on' : ''} title={title} onClick={() => setQuality(q)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        {hw && (
+          <ul className="fit" aria-label="How well this PC will cope">
+            {(['map', 'splat'] as JobKind[]).map((k) => {
+              const fit = k === 'map' ? mapFit(hw, photos.length, quality) : splatFit(hw, photos.length, quality)
+              return (
+                <li key={k}>
+                  <span className={`fit-badge fit-${fit.rating}`}>{RATING[fit.rating]}</span>
                   <span>
-                    {progress?.message ?? 'Starting…'}
-                    {progress?.step === 'download' && progress.total
-                      ? ` · ${gb(progress.done)} of ${gb(progress.total)}`
-                      : ''}
+                    <b>{KIND[k].label}:</b> {fit.message}
                   </span>
-                  {(!progress || progress.step === 'download') && (
-                    <button className="btn" onClick={() => engineCancel()}>
-                      Cancel
-                    </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+        <div className="proc-make">
+          {(['map', 'splat'] as JobKind[]).map((k) => (
+            <button
+              key={k}
+              className="btn btn-primary"
+              disabled={photos.length < 5 || !!running || !installed(KIND[k].pack)}
+              title={!installed(KIND[k].pack) ? 'Install its processing tools first (below)' : undefined}
+              onClick={() => start(k)}
+            >
+              {KIND[k].label}
+            </button>
+          ))}
+        </div>
+        {!scan && <p className="fine">Choose the photos first.</p>}
+        {running && (
+          <p className="fine">
+            One job runs at a time.{' '}
+            <button className="link-btn" onClick={onClose}>
+              Minimise
+            </button>{' '}
+            to use the map while it runs; its progress shows in the bottom bar.
+          </p>
+        )}
+      </section>
+
+      {jobs.length > 0 && (
+        <section className="proc-step">
+          <h3>Results</h3>
+          <ul className="jobs">
+            {jobs.map((j) => {
+              const p = progress[j.id]
+              return (
+                <li key={j.id} className={`job job-${j.status}`}>
+                  <div className="job-head">
+                    <b>{j.name}</b>
+                    <span className="fine">
+                      {KIND[j.kind].label} · {j.photos} photos · {when(j.startedAt)}
+                      {j.status === 'done' && ` · took ${took(j.seconds)}`}
+                    </span>
+                  </div>
+                  {j.status === 'running' ? (
+                    <div className="pack-progress">
+                      <progress max={100} value={p?.pct ?? undefined} />
+                      <span>
+                        {p?.stage ?? j.stage}
+                        {p ? ` · ${Math.round(p.pct)}%` : ''}
+                      </span>
+                      <button className="btn" onClick={() => jobCancel(j.id)}>
+                        Cancel
+                      </button>
+                      {p?.line && <code className="job-line">{p.line}</code>}
+                    </div>
+                  ) : (
+                    <div className="dialog-actions job-actions">
+                      {j.status === 'done' && j.kind === 'map' && (
+                        <>
+                          <button className={`btn ${view.overlay?.id === j.id ? 'btn-primary' : ''}`} onClick={() => showMap(j)}>
+                            {view.overlay?.id === j.id ? 'Hide map' : 'Show on map'}
+                          </button>
+                          {j.outputs?.model && (
+                            <button className="btn" onClick={() => onView({ title: j.name, kind: 'mesh', path: j.outputs!.model! })}>
+                              View 3D model
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {j.status === 'done' && j.kind === 'splat' && (
+                        <button className="btn btn-primary" onClick={() => onView({ title: j.name, kind: 'splat', path: j.outputs!.splat! })}>
+                          View splat
+                        </button>
+                      )}
+                      {j.status === 'done' && j.kind === 'splat' && (
+                        <button className="btn" onClick={() => open(j, 'splat')} title="Open in Brush, the splat trainer's own viewer">
+                          Open in Brush
+                        </button>
+                      )}
+                      {j.status !== 'done' && (
+                        <span className="error job-error">
+                          {j.status === 'failed' ? j.error : j.status === 'cancelled' ? 'Cancelled' : 'Stopped when the app closed'}
+                        </span>
+                      )}
+                      <button className="btn" onClick={() => open(j, 'folder')}>
+                        Folder
+                      </button>
+                      <span className="spacer" />
+                      <button
+                        className="btn btn-danger"
+                        onClick={async () => {
+                          if (confirmDelete !== j.id) return setConfirmDelete(j.id)
+                          setConfirmDelete(null)
+                          if (view.overlay?.id === j.id) view.setOverlay(null)
+                          const r = await jobDelete(j.id)
+                          if (!r.ok) setError(r.error ?? 'Could not delete it.')
+                          void refresh()
+                        }}
+                      >
+                        {confirmDelete === j.id ? 'Really delete?' : 'Delete'}
+                      </button>
+                    </div>
                   )}
-                </div>
-              ) : (
-                <div className="dialog-actions">
-                  <span className="fine">
-                    {p.installed
-                      ? `Uses about ${gb(p.installedBytes)}`
-                      : `${gb(p.downloadBytes)} download · about ${gb(p.installedBytes)} on disk`}
-                  </span>
-                  <span className="spacer" />
-                  {p.installed && (
-                    <button className="btn btn-danger" disabled={!!busy} onClick={() => run(p.id, 'remove')}>
-                      Remove
-                    </button>
-                  )}
-                  {(!p.installed || !p.upToDate) && (
-                    <button
-                      className="btn btn-primary"
-                      disabled={!!busy || !status.windows || lowDisk}
-                      title={lowDisk ? 'Not enough free disk space' : undefined}
-                      onClick={() => run(p.id, 'install')}
-                    >
-                      {p.installed ? 'Update' : 'Install'}
-                    </button>
-                  )}
-                </div>
-              )}
-            </section>
-          )
-        })}
-      </div>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
+
       {error && <p className="error">{error}</p>}
-      {status?.freeBytes != null && <p className="fine">{gb(status.freeBytes)} free on this drive.</p>}
-      <p className="fine">
-        Installing downloads the tools from their official GitHub releases and checks each file's fingerprint before
-        using it. The splat trainer needs a reasonably modern graphics card.
-      </p>
+
+      <details className="proc-step" open={!allInstalled}>
+        <summary>
+          <h3>Processing tools</h3>
+        </summary>
+        <p className="fine">Free, open-source tools, downloaded once. App updates keep them.</p>
+        <div className="packs">
+          {engines?.packs.map((p) => {
+            const mine = installing === p.id
+            const pct =
+              mine && installProgress && installProgress.total ? Math.min(100, (installProgress.done / installProgress.total) * 100) : null
+            const lowDisk = engines.freeBytes != null && engines.freeBytes < p.downloadBytes + p.installedBytes
+            return (
+              <section key={p.id} className={`pack ${p.installed ? 'pack-on' : ''}`}>
+                <div className="pack-head">
+                  <h3>{p.title}</h3>
+                  <span className="pack-state">{p.installed ? (p.upToDate ? 'Installed' : 'Update available') : 'Not installed'}</span>
+                </div>
+                <p className="pack-sum">{p.summary}</p>
+                {mine ? (
+                  <div className="pack-progress">
+                    <progress max={100} value={pct ?? undefined} />
+                    <span>
+                      {installProgress?.message ?? 'Starting…'}
+                      {installProgress?.total && installProgress.total > 1
+                        ? ` · ${gb(installProgress.done)} of ${gb(installProgress.total)}`
+                        : ''}
+                    </span>
+                    {(!installProgress || installProgress.step === 'download') && (
+                      <button className="btn" onClick={() => engineCancel()}>
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="dialog-actions">
+                    <span className="fine">
+                      {p.installed ? `Uses about ${gb(p.installedBytes)}` : `${gb(p.downloadBytes)} download · about ${gb(p.installedBytes)} on disk`}
+                    </span>
+                    <span className="spacer" />
+                    {p.installed && (
+                      <button className="btn btn-danger" disabled={!!installing || !!running} onClick={() => install(p.id, 'remove')}>
+                        Remove
+                      </button>
+                    )}
+                    {(!p.installed || !p.upToDate) && (
+                      <button
+                        className="btn btn-primary"
+                        disabled={!!installing || !engines.windows || lowDisk}
+                        title={lowDisk ? 'Not enough free disk space' : undefined}
+                        onClick={() => install(p.id, 'install')}
+                      >
+                        {p.installed ? 'Update' : 'Install'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+            )
+          })}
+        </div>
+        {engines?.freeBytes != null && <p className="fine">{gb(engines.freeBytes)} free on this drive.</p>}
+        <p className="fine">
+          Downloads come from each tool's official GitHub release and are checked against a fixed fingerprint before
+          installing. Splats train on the graphics card, so a gaming or workstation GPU is much faster.
+        </p>
+      </details>
     </Dialog>
   )
 }

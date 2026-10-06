@@ -162,9 +162,9 @@ mod tests {
 
     #[test]
     fn mission_ids() {
-        assert!(is_mission_id("BACAD3AC-ECEC-470A-B69B-5145AB8FC239"));
+        assert!(is_mission_id("7F3C1A20-9B4E-4C1D-8E2F-0A1B2C3D4E5F"));
         assert!(!is_mission_id("..\\..\\..\\DCIM"));
-        assert!(!is_mission_id("BACAD3AC-ECEC-470A-B69B-5145AB8FC23"));
-        assert!(!is_mission_id("BACAD3ACxECEC-470A-B69B-5145AB8FC239"));
+        assert!(!is_mission_id("7F3C1A20-9B4E-4C1D-8E2F-0A1B2C3D4E5"));
+        assert!(!is_mission_id("7F3C1A20x9B4E-4C1D-8E2F-0A1B2C3D4E5F"));
     }
 }

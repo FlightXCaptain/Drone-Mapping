@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MapView, type Basemap } from './components/MapView'
 import { ControlCard } from './components/ControlCard'
 import { Toolbar } from './components/Toolbar'
@@ -9,7 +9,9 @@ import { PlaceSearch } from './components/PlaceSearch'
 import { SharedPlanPrompt } from './components/SharedPlanPrompt'
 import { InspectPanel } from './components/InspectPanel'
 import { ProcessingDialog } from './components/ProcessingDialog'
-import { isDesktop } from './bridge'
+import { ModelViewer, type ViewerModel } from './components/ModelViewer'
+import { isDesktop, jobsList, onJobProgress, photoSources, type PhotoSource } from './bridge'
+import { useProcessingView } from './processing'
 import { currentParts, useCurrentDrone, usePlanner } from './store'
 import { planAll } from './plan'
 import type { LngLat } from './domain/types'
@@ -21,6 +23,67 @@ export default function App() {
   const [basemap, setBasemap] = useState<Basemap>('satellite')
   const [flyTo, setFlyTo] = useState<LngLat | null>(null)
   const [processingOpen, setProcessingOpen] = useState(false)
+  const [startWith, setStartWith] = useState<PhotoSource | null>(null)
+  const [viewing, setViewing] = useState<ViewerModel | null>(null)
+  const view = useProcessingView()
+
+  // Watch for cards and DJI devices with photos: drives every few seconds (cheap), DJI USB
+  // devices less often (each look starts PowerShell).
+  useEffect(() => {
+    if (!isDesktop()) return
+    let n = 0
+    let busy = false
+    const look = async () => {
+      if (busy) return
+      busy = true
+      try {
+        const r = await photoSources(n++ % 4 === 0)
+        const { sources, setSources } = useProcessingView.getState()
+        // Keep USB sources found by the slower check between its runs.
+        const usb = n % 4 === 1 ? [] : sources.filter((s) => s.kind === 'mtp')
+        const merged = [...r.sources, ...usb.filter((u) => !r.sources.some((s) => s.id === u.id))]
+        if (JSON.stringify(merged) !== JSON.stringify(sources)) setSources(merged)
+      } catch {
+        /* not fatal: try again next time */
+      }
+      busy = false
+    }
+    void look()
+    const t = setInterval(look, 5000)
+    return () => clearInterval(t)
+  }, [])
+  // Offer the source most likely to be the flight: the biggest folder, never DJI's simulator.
+  const newSource = view.sources
+    .filter((x) => !view.seen.includes(x.id) && !/simulator/i.test(x.label))
+    .sort((a, b) => b.photos - a.photos)[0]
+
+  // Follow processing jobs app-wide, so progress shows in the bottom bar with the window closed.
+  useEffect(() => {
+    if (!isDesktop()) return
+    const { setJob, setFinished } = useProcessingView.getState()
+    jobsList().then(
+      (r) => {
+        const j = r.jobs.find((x) => x.status === 'running')
+        if (j) setJob({ id: j.id, name: j.name, kind: j.kind, stage: j.stage, pct: 0 })
+      },
+      () => {},
+    )
+    let stop: (() => void) | undefined
+    let gone = false
+    onJobProgress((p) => {
+      if (['done', 'failed', 'cancelled'].includes(p.stage)) {
+        setJob(null)
+        setFinished({ id: p.id, name: p.name, kind: p.kind, status: p.stage })
+      } else {
+        setJob({ id: p.id, name: p.name, kind: p.kind, stage: p.stage, pct: p.pct })
+        setFinished(null)
+      }
+    }).then((u) => (gone ? u() : (stop = u)))
+    return () => {
+      gone = true
+      stop?.()
+    }
+  }, [])
 
   // Re-plan every part on every edit. Planning is pure and takes a few ms, which is what lets
   // dragging a corner or the route feel live.
@@ -57,24 +120,97 @@ export default function App() {
         ))}
       </div>
 
-      {isDesktop() && (
-        <button className="tools-btn" onClick={() => setProcessingOpen(true)} title="Install tools that turn flight photos into maps, 3D models and splats">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
-            <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12L4 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-          </svg>
-          Processing
-        </button>
+      {newSource && !processingOpen && (
+        <div className="source-prompt" role="status">
+          <span>
+            <b>{newSource.photos.toLocaleString()} photos</b> found on {newSource.label}
+          </span>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              view.markSeen(newSource.id)
+              setStartWith(newSource)
+              setProcessingOpen(true)
+            }}
+          >
+            Process
+          </button>
+          <button
+            className="icon-btn"
+            aria-label="Dismiss"
+            // Dismissing hides every source found so far; a newly plugged-in one still prompts.
+            onClick={() => view.sources.forEach((x) => view.markSeen(x.id))}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {(view.photos || view.overlay) && (
+        <div className="proc-chips">
+          {view.photos && (
+            <button className="proc-chip" onClick={() => view.setPhotos(null)} title="Hide the photo positions">
+              <i className="dot dot-taken" /> {view.photos.taken.length} photos
+              {view.photos.missing.length > 0 && (
+                <>
+                  {' '}
+                  <i className="dot dot-missing" /> {view.photos.missing.length} missing
+                </>
+              )}{' '}
+              ✕
+            </button>
+          )}
+          {view.overlay && (
+            <button className="proc-chip" onClick={() => view.setOverlay(null)} title="Hide the processed map">
+              Processed map ✕
+            </button>
+          )}
+        </div>
       )}
 
       <div className="bottom">
         <Toolbar />
-        <StatsBar stats={stats} />
+        <StatsBar
+          stats={stats}
+          onProcess={
+            isDesktop()
+              ? () => {
+                  view.setFinished(null)
+                  setProcessingOpen(true)
+                }
+              : undefined
+          }
+        />
       </div>
 
       {s.sendOpen && mission && <SendDialog mission={mission} />}
       <InspectPanel plan={mission} onFocus={(c) => setFlyTo([...c])} />
       <SharedPlanPrompt onOpened={(c) => c && setFlyTo([...c])} />
-      {processingOpen && <ProcessingDialog onClose={() => setProcessingOpen(false)} />}
+      {processingOpen && (
+        <ProcessingDialog
+          onClose={() => {
+            setProcessingOpen(false)
+            setStartWith(null)
+          }}
+          planned={mission?.photoPoints ?? []}
+          missionName={s.missionName}
+          startWith={startWith}
+          onView={(m) => {
+            // The processing window is modal (always on top), so step out of it while viewing.
+            setProcessingOpen(false)
+            setStartWith(null)
+            setViewing(m)
+          }}
+        />
+      )}
+      {viewing && (
+        <ModelViewer
+          model={viewing}
+          onClose={() => {
+            setViewing(null)
+            setProcessingOpen(true)
+          }}
+        />
+      )}
       {s.droneEditor && <DroneEditor initial={s.droneEditor === 'new' ? null : s.droneEditor} />}
     </div>
   )
