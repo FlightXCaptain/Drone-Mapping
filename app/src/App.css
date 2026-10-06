@@ -435,7 +435,13 @@
 .viewer {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
   background: #1b2230;
 }
 .viewer-canvas {

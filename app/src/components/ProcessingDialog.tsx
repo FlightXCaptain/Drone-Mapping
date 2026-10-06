@@ -72,10 +72,13 @@ export function ProcessingDialog({
   const view = useProcessingView()
   const [engines, setEngines] = useState<EngineStatus | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
-  const [scan, setScan] = useState<PhotoScan | null>(null)
+  const { scan, flightIdx, quality } = view.form
+  const name = view.form.name ?? missionName
+  const setScan = (scan: PhotoScan | null) => view.setForm({ scan })
+  const setFlightIdx = (flightIdx: number) => view.setForm({ flightIdx })
+  const setName = (name: string) => view.setForm({ name })
+  const setQuality = (quality: Quality) => view.setForm({ quality })
   const [scanning, setScanning] = useState(false)
-  const [name, setName] = useState(missionName)
-  const [quality, setQuality] = useState<Quality>('standard')
   const [progress, setProgress] = useState<Record<string, JobProgress>>({})
   const [installing, setInstalling] = useState<string | null>(null)
   const [installProgress, setInstallProgress] = useState<EngineProgress | null>(null)
@@ -83,7 +86,6 @@ export function ProcessingDialog({
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState<{ id: string; text: string } | null>(null)
   const [hw, setHw] = useState<Hardware | null>(null)
-  const [flightIdx, setFlightIdx] = useState(0)
   const [importing, setImporting] = useState<{ id: string; done: number; total: number } | null>(null)
 
   const refresh = useCallback(async () => {

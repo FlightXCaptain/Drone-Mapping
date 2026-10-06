@@ -194,22 +194,11 @@ export default function App() {
           planned={mission?.photoPoints ?? []}
           missionName={s.missionName}
           startWith={startWith}
-          onView={(m) => {
-            // The processing window is modal (always on top), so step out of it while viewing.
-            setProcessingOpen(false)
-            setStartWith(null)
-            setViewing(m)
-          }}
+          onView={setViewing}
         />
       )}
       {viewing && (
-        <ModelViewer
-          model={viewing}
-          onClose={() => {
-            setViewing(null)
-            setProcessingOpen(true)
-          }}
-        />
+        <ModelViewer model={viewing} onClose={() => setViewing(null)} />
       )}
       {s.droneEditor && <DroneEditor initial={s.droneEditor === 'new' ? null : s.droneEditor} />}
     </div>
