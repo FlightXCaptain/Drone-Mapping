@@ -1,6 +1,6 @@
 [package]
 name = "drone-mapping"
-version = "0.1.10"
+version = "0.1.11"
 description = "Plan DJI drone photo missions and send them to the controller"
 authors = ["FlightXCaptain"]
 license = "MIT"

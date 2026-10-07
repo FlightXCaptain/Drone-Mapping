@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "drone-mapping"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64 0.22.1",
  "fs4",

@@ -90,7 +90,15 @@ export function ModelViewer({ model, onClose }: { model: ViewerModel; onClose: (
         } else {
           if (/\.glb$/i.test(model.path)) {
             const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-            object = (await new GLTFLoader().loadAsync(url, onProgress)).scene
+            const { DRACOLoader } = await import('three/examples/jsm/loaders/DRACOLoader.js')
+            // OpenDroneMap Draco-compresses its .glb meshes. The decoder ships with the app
+            // (public/draco) so models still open offline.
+            const draco = new DRACOLoader().setDecoderPath(import.meta.env.BASE_URL + 'draco/')
+            try {
+              object = (await new GLTFLoader().setDRACOLoader(draco).loadAsync(url, onProgress)).scene
+            } finally {
+              draco.dispose()
+            }
           } else {
             const { MTLLoader } = await import('three/examples/jsm/loaders/MTLLoader.js')
             const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js')

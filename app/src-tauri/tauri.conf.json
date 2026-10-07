@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Drone Mapping",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "identifier": "com.flightxcaptain.dronemapping",
   "build": {
     "frontendDist": "../dist",
